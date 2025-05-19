@@ -80,11 +80,8 @@ void pause() {
     TCCR0B = 0;
 }
 
-void resume(uint16_t compTicks) {
+void resume() {
     if (paused) {
-        ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-            ticks += compTicks;
-        }
         paused = false;
         setupMSTimer();
     }

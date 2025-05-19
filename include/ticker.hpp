@@ -13,7 +13,7 @@ namespace Ticker {
 void setupMSTimer();
 uint32_t getNumTicks();
 void pause();
-void resume(uint16_t);
+void resume();
 
 }
 }
