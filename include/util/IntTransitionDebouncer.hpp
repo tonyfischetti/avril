@@ -112,8 +112,8 @@ class IntTransitionDebouncer {
     using Callback = void (*)();
 
     HAL::GPIO::GPIO<physicalPin> gpio;
-    bool stableState;
     volatile uint32_t lastUnprocessedPrimeInterrupt;
+    bool stableState;
     Callback onFalling;
     Callback onRising;
 

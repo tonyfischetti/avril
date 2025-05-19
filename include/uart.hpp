@@ -12,7 +12,7 @@ namespace HAL {
 namespace UART {
 
 #if defined(__AVR_ATtiny85__)
-#warning "HAL::UART is not supported on ATtiny85"
+// #warning "HAL::UART is not supported on ATtiny85"
 #else
 
 template<uint32_t BaudRate>
@@ -52,7 +52,9 @@ inline void println(const char* str) {
     printByte('\n');
 }
 
-//  TODO  
+//  TODO  does it contain the null-terminator?
+//  TODO  take the format string and number templated
+//  TODO  should this even _B_ here?
 inline void print(uint32_t n) {
     char buf[20];
     snprintf(buf, 20, "%lu", n);
