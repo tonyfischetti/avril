@@ -120,7 +120,8 @@ class IntTransitionDebouncer {
   public:
 
     IntTransitionDebouncer() 
-        : lastUnprocessedPrimeInterrupt { 0 },
+        : gpio                          {},
+          lastUnprocessedPrimeInterrupt { 0 },
           stableState                   { initialState },
           onFalling                     { nullptr },
           onRising                      { nullptr } {
@@ -154,31 +155,33 @@ class IntTransitionDebouncer {
             if ((static_cast<uint32_t>((now - snapshotOfPrimeInterreuptTime))) >= debounceWaitTime) {
                 bool nowState = gpio.read();
 
-                if (nowState && !stableState)
-                    transition = Transition::RISING;
-                else if (!nowState && stableState)
-                    transition = Transition::FALLING;
-                stableState = nowState;
-                WRITE_VOLATILE_U32(lastUnprocessedPrimeInterrupt, 0);
+                if (nowState != stableState) {
+                    Transition tentative = nowState
+                        ? Transition::RISING
+                        : Transition::FALLING;
+
+                    bool wonTheRaceP { false };
+                    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+                        if (lastUnprocessedPrimeInterrupt == snapshotOfPrimeInterreuptTime) {
+                            lastUnprocessedPrimeInterrupt = 0;
+                            stableState = nowState;
+                            transition = tentative;
+                            wonTheRaceP = true;
+                        }
+                    }
+
+                    if (wonTheRaceP) {
+                        if (transition == Transition::RISING  &&  onRising)  onRising();
+                        if (transition == Transition::FALLING && onFalling) onFalling();
+                    }
+                }
             }
-        }
-        switch (transition) {
-            case HAL::Transition::RISING:
-                if (onRising) onRising();
-                break;
-            case HAL::Transition::FALLING:
-                if (onFalling) onFalling();
-                break;
-            default:
-                break;
         }
         return transition;
     }
 
     bool pendingDebounceTimeout() {
-        if (lastUnprocessedPrimeInterrupt > 0)
-            return true;
-        return false;
+        return lastUnprocessedPrimeInterrupt > 0;
     }
 
 };
