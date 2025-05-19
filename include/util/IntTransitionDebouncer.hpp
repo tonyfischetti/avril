@@ -105,21 +105,25 @@ enum class Transition : uint8_t { RISING, FALLING, NONE };
 
 namespace Utils {
 
-template<uint8_t physicalPin,
-         uint32_t debounceWaitTime,
-         bool initialState,
-         bool usePullupP>
+template<uint8_t physicalPin, uint32_t debounceWaitTime,
+         bool initialState, bool usePullupP>
 class IntTransitionDebouncer {
+
+    using Callback = void (*)();
 
     HAL::GPIO::GPIO<physicalPin> gpio;
     bool stableState;
     volatile uint32_t lastUnprocessedPrimeInterrupt;
+    Callback onFalling;
+    Callback onRising;
 
   public:
 
     IntTransitionDebouncer() 
         : lastUnprocessedPrimeInterrupt { 0 },
-          stableState { initialState } {
+          stableState                   { initialState },
+          onFalling                     { nullptr },
+          onRising                      { nullptr } {
     }
 
     void begin() {
@@ -130,7 +134,6 @@ class IntTransitionDebouncer {
         gpio.enablePCINT();
     }
 
-
     void notifyInterruptOccurred(uint32_t now, uint8_t changed) {
         if (changed & gpio.mask) {
             if (!lastUnprocessedPrimeInterrupt) {
@@ -139,25 +142,35 @@ class IntTransitionDebouncer {
         }
     }
 
+    void setOnFalling(Callback fnptr) { onFalling = fnptr; }
+    void setOnRising(Callback fnptr)  { onRising  = fnptr; }
+
     Transition processAnyInterrupts() {
         Transition transition { Transition::NONE };
         uint32_t snapshotOfPrimeInterreuptTime { 0 };
         READ_VOLATILE_U32(lastUnprocessedPrimeInterrupt, snapshotOfPrimeInterreuptTime);
         if (snapshotOfPrimeInterreuptTime > 0) {
             uint32_t now = HAL::Ticker::getNumTicks();
-            if ((static_cast<uint32_t>(
-                 (now - snapshotOfPrimeInterreuptTime))) >= debounceWaitTime) {
+            if ((static_cast<uint32_t>((now - snapshotOfPrimeInterreuptTime))) >= debounceWaitTime) {
                 bool nowState = gpio.read();
 
                 if (nowState && !stableState)
                     transition = Transition::RISING;
                 else if (!nowState && stableState)
                     transition = Transition::FALLING;
-
                 stableState = nowState;
-
                 WRITE_VOLATILE_U32(lastUnprocessedPrimeInterrupt, 0);
             }
+        }
+        switch (transition) {
+            case HAL::Transition::RISING:
+                if (onRising) onRising();
+                break;
+            case HAL::Transition::FALLING:
+                if (onFalling) onFalling();
+                break;
+            default:
+                break;
         }
         return transition;
     }
