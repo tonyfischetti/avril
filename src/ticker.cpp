@@ -99,5 +99,7 @@ ISR(TIM0_COMPA_vect) {
 #elif defined(__AVR_ATmega328P__)
 ISR(TIMER0_COMPA_vect) {
 #endif
-    HAL::Ticker::ticks++;
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        HAL::Ticker::ticks++;
+    }
 }
