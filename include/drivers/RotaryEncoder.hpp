@@ -11,6 +11,14 @@
  *        and see if direction is correct
  */
 
+/*
+ *  TODO  add fast rotate detection?
+ */
+
+/*
+ *  TODO  add documentation
+ */
+
 namespace HAL {
 
 enum class RotaryEncoderAction : uint8_t { NONE, CW, CCW };
@@ -21,24 +29,27 @@ template<uint8_t clkPin,
          uint8_t dtPin,
          uint32_t debounceWaitTime,
          bool passiveState,
-         bool usePullupP>
+         bool usePullupP,
+         bool reverseP=false>
 class RotaryEncoder {
 
     using Callback = void (*)();
 
-    // HAL::GPIO::GPIO<clkPin> clk;
     HAL::GPIO::GPIO<dtPin> dt;
     HAL::Utils::IntTransitionDebouncer<clkPin,
                                        debounceWaitTime,
                                        passiveState,
                                        usePullupP> debouncer;
+    Callback onCW;
+    Callback onCCW;
     
-    //  TODO  add callbacks
 
   public:
     RotaryEncoder()
-        : dt {},
-          debouncer {} {
+        : dt        { },
+          debouncer { },
+          onCW      { nullptr },
+          onCCW     { nullptr } {
     }
 
     void begin() {
@@ -53,21 +64,45 @@ class RotaryEncoder {
         debouncer.notifyInterruptOccurred(now, changed);
     }
 
-    // void setOnCW(Callback fnptr)  { onCW = fnptr; }
-    // void setOnCCW(Callback fnptr) { onCCW  = fnptr; }
+    void setOnCW(Callback fnptr)  { onCW = fnptr; }
+    void setOnCCW(Callback fnptr) { onCCW  = fnptr; }
 
 
     RotaryEncoderAction process() {
         Transition dbTransition { debouncer.processAnyInterrupts() };
-        // if (dbTransition != Transition::NONE) { only falling!
+        RotaryEncoderAction rea { RotaryEncoderAction::NONE };
+
         if (dbTransition == Transition::FALLING) {
             bool dtState = dt.read();
             if (dtState==passiveState) {
-                return RotaryEncoderAction::CCW;
+                rea = RotaryEncoderAction::CCW;
+            } else {
+                rea = RotaryEncoderAction::CW;
             }
-            return RotaryEncoderAction::CW;
         }
-        return RotaryEncoderAction::NONE;
+        switch (rea) {
+            case RotaryEncoderAction::CW:
+                if constexpr (!reverseP) {
+                    if (onCW) onCW();
+                    return RotaryEncoderAction::CW;
+                } else {
+                    if (onCCW) onCCW();
+                    return RotaryEncoderAction::CCW;
+                }
+                break;
+            case RotaryEncoderAction::CCW:
+                if constexpr (!reverseP) {
+                    if (onCCW) onCCW();
+                    return RotaryEncoderAction::CCW;
+                } else {
+                    if (onCW) onCW();
+                    return RotaryEncoderAction::CW;
+                }
+                break;
+            default:
+                return rea;
+        }
+
     }
 
 
