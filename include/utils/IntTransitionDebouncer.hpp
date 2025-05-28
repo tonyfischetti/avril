@@ -185,6 +185,10 @@ class IntTransitionDebouncer {
         return transition;
     }
 
+    bool getStableState() {
+        return stableState;
+    }
+
     bool pendingDebounceTimeout() {
         return lastUnprocessedPrimeInterrupt > 0;
     }
