@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "util/LFSR.hpp"
+#include "utils/LFSR.hpp"
 
 
 extern "C" {

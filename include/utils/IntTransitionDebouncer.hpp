@@ -6,6 +6,7 @@
 #include "gpio.hpp"
 #include "ticker.hpp"
 
+    //  TODO  BEEF UP DOCUMENTATION
     //  TODO  mention .enable()
 
 /**
@@ -105,22 +106,24 @@ enum class Transition : uint8_t { RISING, FALLING, NONE };
 
 namespace Utils {
 
-template<uint8_t physicalPin, uint32_t debounceWaitTime,
-         bool initialState, bool usePullupP>
+template<uint8_t physicalPin,
+         uint32_t debounceWaitTime,
+         bool initialState,
+         bool usePullupP>
 class IntTransitionDebouncer {
 
     using Callback = void (*)();
 
     HAL::GPIO::GPIO<physicalPin> gpio;
-    volatile uint32_t lastUnprocessedPrimeInterrupt;
-    bool stableState;
-    Callback onFalling;
-    Callback onRising;
+    volatile uint32_t            lastUnprocessedPrimeInterrupt;
+    bool                         stableState;
+    Callback                     onFalling;
+    Callback                     onRising;
 
   public:
 
     IntTransitionDebouncer() 
-        : gpio                          {},
+        : gpio                          { },
           lastUnprocessedPrimeInterrupt { 0 },
           stableState                   { initialState },
           onFalling                     { nullptr },
@@ -144,16 +147,18 @@ class IntTransitionDebouncer {
     }
 
     void setOnFalling(Callback fnptr) { onFalling = fnptr; }
-    void setOnRising(Callback fnptr)  { onRising  = fnptr; }
+    void setOnRising(Callback fnptr)  {  onRising = fnptr; }
 
     Transition processAnyInterrupts() {
-        Transition transition { Transition::NONE };
-        uint32_t snapshotOfPrimeInterreuptTime { 0 };
+        Transition transition                    { Transition::NONE };
+        uint32_t   snapshotOfPrimeInterreuptTime { 0 };
+
         READ_VOLATILE_U32(lastUnprocessedPrimeInterrupt, snapshotOfPrimeInterreuptTime);
+
         if (snapshotOfPrimeInterreuptTime > 0) {
             uint32_t now = HAL::Ticker::getNumTicks();
-            if ((static_cast<uint32_t>((now - snapshotOfPrimeInterreuptTime))) >= debounceWaitTime) {
-                bool nowState = gpio.read();
+            if (((now - snapshotOfPrimeInterreuptTime)) >= debounceWaitTime) {
+                bool nowState { gpio.read() };
 
                 if (nowState != stableState) {
                     Transition tentative = nowState
