@@ -80,6 +80,7 @@ class RotaryEncoder {
                 rea = RotaryEncoderAction::CW;
             }
         }
+
         switch (rea) {
             case RotaryEncoderAction::CW:
                 if constexpr (!reverseP) {
