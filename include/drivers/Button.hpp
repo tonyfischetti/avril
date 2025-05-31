@@ -134,7 +134,7 @@ class Button {
 
     bool pendingDebounceTimeout() {
         //  TODO  AND IF HELD DOWN!
-        return debouncer.pendingDebounceTimeout();
+        return debouncer.pendingDebounceTimeout() || !debouncer.getStableState();
     }
 
 };
