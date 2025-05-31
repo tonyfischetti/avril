@@ -43,6 +43,15 @@ class RotaryEncoder {
     Callback onCW;
     Callback onCCW;
     
+    //  TODO  try inline
+    // RotaryEncoderAction doCW() {
+    //     if (onCW) onCW();
+    //     return RotaryEncoderAction::CW;
+    // }
+    // RotaryEncoderAction doCCW() {
+    //     if (onCW) onCCW();
+    //     return RotaryEncoderAction::CW;
+    // }
 
   public:
     RotaryEncoder()
@@ -64,8 +73,8 @@ class RotaryEncoder {
         debouncer.notifyInterruptOccurred(now, changed);
     }
 
-    void setOnCW(Callback fnptr)  { onCW = fnptr; }
-    void setOnCCW(Callback fnptr) { onCCW  = fnptr; }
+    void setOnCW(Callback fnptr)  {  onCW = fnptr; }
+    void setOnCCW(Callback fnptr) { onCCW = fnptr; }
 
 
     RotaryEncoderAction process() {
@@ -74,36 +83,25 @@ class RotaryEncoder {
 
         if (dbTransition == Transition::FALLING) {
             bool dtState = dt.read();
-            if (dtState==passiveState) {
-                rea = RotaryEncoderAction::CCW;
+            if (dtState == passiveState) {
+                rea = (!reverseP) ? RotaryEncoderAction::CCW : RotaryEncoderAction::CW;
             } else {
-                rea = RotaryEncoderAction::CW;
+                rea = (!reverseP) ? RotaryEncoderAction::CW : RotaryEncoderAction::CCW;
             }
         }
 
         switch (rea) {
             case RotaryEncoderAction::CW:
-                if constexpr (!reverseP) {
-                    if (onCW) onCW();
-                    return RotaryEncoderAction::CW;
-                } else {
-                    if (onCCW) onCCW();
-                    return RotaryEncoderAction::CCW;
-                }
+                if (onCW) onCW();
+                return RotaryEncoderAction::CW;
                 break;
             case RotaryEncoderAction::CCW:
-                if constexpr (!reverseP) {
-                    if (onCCW) onCCW();
-                    return RotaryEncoderAction::CCW;
-                } else {
-                    if (onCW) onCW();
-                    return RotaryEncoderAction::CW;
-                }
+                if (onCCW) onCCW();
+                return RotaryEncoderAction::CCW;
                 break;
             default:
                 return rea;
         }
-
     }
 
 
