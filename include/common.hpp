@@ -7,6 +7,8 @@
 constexpr bool HIGH {  true };
 constexpr bool LOW  { false };
 
+using Callback = void (*)();
+
 #define READ_VOLATILE_U32(var, dest)   \
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) { \
         (dest) = (var);                 \

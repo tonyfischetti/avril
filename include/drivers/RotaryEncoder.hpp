@@ -33,8 +33,6 @@ template<uint8_t clkPin,
          bool reverseP=false>
 class RotaryEncoder {
 
-    using Callback = void (*)();
-
     HAL::GPIO::GPIO<dtPin> dt;
     HAL::Utils::IntTransitionDebouncer<clkPin,
                                        debounceWaitTime,

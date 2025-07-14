@@ -36,8 +36,6 @@ template<uint8_t  physicalPin,
          bool     allowConsecutiveLongPresses=false>
 class Button {
 
-    using Callback = void (*)();
-
     HAL::GPIO::GPIO<physicalPin> gpio;
     HAL::Utils::IntTransitionDebouncer<physicalPin,
                                        debounceWaitTime,
@@ -74,6 +72,13 @@ class Button {
     void setOnPress(Callback fnptr)     {     onPress = fnptr; }
     void setOnLongPress(Callback fnptr) { onLongPress = fnptr; }
 
+    bool getStableState() {
+        return debouncer.getStableState();
+    }
+
+    bool getNowState() {
+        return gpio.read();
+    }
 
     ButtonAction process() {
         Transition btnTransition { debouncer.processAnyInterrupts() };
