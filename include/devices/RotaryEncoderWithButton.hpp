@@ -19,7 +19,7 @@ enum REWithButtonAction : uint8_t {
     PRESSED_CCW
 };
 
-namespace Drivers {
+namespace Devices {
 
 template<uint8_t btnPin,
          uint32_t btnDebounceWaitTime,
@@ -36,7 +36,7 @@ template<uint8_t btnPin,
          bool     reReverseP=false>
 class RotaryEncoderWithButton {
 
-    HAL::Drivers::Button<btnPin,
+    HAL::Devices::Button<btnPin,
                          btnDebounceWaitTime,
                          btnLongPressWaitTime,
                          btnPassiveState,
@@ -44,7 +44,7 @@ class RotaryEncoderWithButton {
                          btnSuppressReleaseAfterLongPress,
                          btnAllowConsecutiveLongPresses> btn;
 
-    HAL::Drivers::RotaryEncoder<reClkPin,
+    HAL::Devices::RotaryEncoder<reClkPin,
                                 reDtPin,
                                 reDebounceWaitTime,
                                 rePassiveState,

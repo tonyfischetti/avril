@@ -25,7 +25,7 @@ namespace HAL {
 
 enum class ButtonAction : uint8_t { NONE, RELEASE, PRESS, LONG_PRESS };
 
-namespace Drivers {
+namespace Devices {
 
 template<uint8_t  physicalPin,
          uint32_t debounceWaitTime,

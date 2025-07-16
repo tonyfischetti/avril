@@ -23,7 +23,7 @@ namespace HAL {
 
 enum class RotaryEncoderAction : uint8_t { NONE, CW, CCW };
 
-namespace Drivers {
+namespace Devices {
 
 template<uint8_t clkPin,
          uint8_t dtPin,
