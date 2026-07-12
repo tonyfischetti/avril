@@ -86,10 +86,10 @@ template<uint8_t physicalPin>
 struct GPIO {
 
 #if defined(__AVR_ATtiny85__)
-    static_assert(physicalPin < 8 || physicalPin > 1,
+    static_assert(physicalPin >= 1 && physicalPin <= 8,
             "Invalid pin number for ATTiny85");
 #elif defined(__AVR_ATmega328P__)
-    static_assert(physicalPin < 29 || physicalPin > 0,
+    static_assert(physicalPin >= 1 && physicalPin <= 28,
             "Invalid pin number for ATMega328P");
 #endif
 
