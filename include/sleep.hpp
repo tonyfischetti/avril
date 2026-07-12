@@ -12,7 +12,12 @@ namespace Sleep {
 
 inline void goToSleep(uint8_t mode) {
     cli();
+    // avr-libc's set_sleep_mode macro internally negates a mask,
+    // tripping -Wsign-conversion at every expansion site
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
     set_sleep_mode(mode);
+#pragma GCC diagnostic pop
     sleep_enable();
     sei();
     sleep_cpu();
