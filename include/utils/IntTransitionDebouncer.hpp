@@ -44,10 +44,10 @@
  * of which pins changed.
  *
  * The `notifyInterruptOccurred(...)` member function checks if there was
- * a pin change for its specific GPIO register. If so, it checks if there
- * is an "unprocessed" interrupt. If so, the notification is ignored. If
- * not, `lastUnprocessedPrimeInterrupt` gets set with the time the interrupt
- * occurred.
+ * a pin change for its specific GPIO register. If so, and no lockout is
+ * currently active, it records the edge (`lockoutStart` = time of the
+ * interrupt, `edgePending` = true) and the lockout begins. Edges that
+ * arrive during an active lockout (i.e. bounce) are ignored.
  *
  * Events get processed by the main loop, in code like
 
@@ -63,17 +63,20 @@
                 break;
         }
  *
- * The `processAnyInterrupts` member function checks if there's an 
- * unprocessed event. If there is, it gets the number of ticks at the 
- * time the member function is called. If a time (since the interrupt)
- * exceeds the `debounceWaitTime`, the pin is read and that is taken to be
- * the new `stableState`. Since we know the last stable state, we know if
- * the Transition is (enum) Transition::RISING or Transition::FALLING
- * (or Transition::NONE). 
+ * The `processAnyInterrupts` member function reports in two phases:
  *
- * So, basically, this serves as a lock-out. Any spurious changes (within
- * the debounce window) are ignored. Once the dust settles, the pin is read
- * for real
+ *   1. The recorded edge is reported _immediately_ (the first edge of a
+ *      press or release is always a genuine transition; its direction is
+ *      simply away from the current stable state). This gives zero-latency
+ *      response and means even very short taps register.
+ *
+ *   2. Once `debounceWaitTime` has elapsed since the edge, the pin is
+ *      sampled once more. If it doesn't match the stable state (e.g. a
+ *      tap that was released within the window), the missing opposite
+ *      transition is reported. Then the lockout is cleared.
+ *
+ * So, basically, the window serves as a lock-out: the bounce following an
+ * edge is ignored, and the end-of-window sample trues everything up.
  *
  * As mentioned above, it used HAL::Ticker
  * This means that if you put the MCU to sleep, the timer stops. To cope
@@ -115,19 +118,21 @@ class IntTransitionDebouncer {
     using Callback = void (*)();
 
     HAL::GPIO::GPIO<physicalPin> gpio;
-    volatile uint32_t            lastUnprocessedPrimeInterrupt;
+    volatile uint32_t            lockoutStart; // time of first edge; 0 = idle
+    volatile bool                edgePending;  // edge seen but not yet reported
     bool                         stableState;
     Callback                     onFalling;
     Callback                     onRising;
 
   public:
 
-    IntTransitionDebouncer() 
-        : gpio                          { },
-          lastUnprocessedPrimeInterrupt { 0 },
-          stableState                   { initialState },
-          onFalling                     { nullptr },
-          onRising                      { nullptr } {
+    IntTransitionDebouncer()
+        : gpio         { },
+          lockoutStart { 0 },
+          edgePending  { false },
+          stableState  { initialState },
+          onFalling    { nullptr },
+          onRising     { nullptr } {
     }
 
     void begin() {
@@ -140,8 +145,9 @@ class IntTransitionDebouncer {
 
     void notifyInterruptOccurred(uint32_t now, uint8_t changed) {
         if (changed & gpio.mask) {
-            if (!lastUnprocessedPrimeInterrupt) {
-                lastUnprocessedPrimeInterrupt = now;
+            if (!lockoutStart) {
+                lockoutStart = now ? now : 1; // 0 means "idle"
+                edgePending  = true;
             }
         }
     }
@@ -150,36 +156,52 @@ class IntTransitionDebouncer {
     void setOnRising(Callback fnptr)  {  onRising = fnptr; }
 
     Transition processAnyInterrupts() {
-        Transition transition                    { Transition::NONE };
-        uint32_t   snapshotOfPrimeInterreuptTime { 0 };
+        Transition transition           { Transition::NONE };
+        uint32_t   snapshotOfLockout    { 0 };
 
-        READ_VOLATILE_U32(lastUnprocessedPrimeInterrupt, snapshotOfPrimeInterreuptTime);
+        READ_VOLATILE_U32(lockoutStart, snapshotOfLockout);
 
-        if (snapshotOfPrimeInterreuptTime > 0) {
-            uint32_t now = HAL::Ticker::getNumTicks();
-            if (((now - snapshotOfPrimeInterreuptTime)) >= debounceWaitTime) {
-                bool nowState { gpio.read() };
+        if (snapshotOfLockout == 0) return Transition::NONE;
 
-                if (nowState != stableState) {
-                    Transition tentative = nowState
-                        ? Transition::RISING
-                        : Transition::FALLING;
+        // phase 1: report the recorded edge immediately (the claim is
+        // atomic; process() may run from both ISR and main contexts)
+        ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+            if (edgePending) {
+                edgePending = false;
+                stableState = !stableState;
+                transition  = stableState
+                    ? Transition::RISING
+                    : Transition::FALLING;
+            }
+        }
+        if (transition != Transition::NONE) {
+            if (transition == Transition::RISING  &&  onRising)  onRising();
+            if (transition == Transition::FALLING && onFalling) onFalling();
+            return transition;
+        }
 
-                    bool wonTheRaceP { false };
-                    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-                        if (lastUnprocessedPrimeInterrupt == snapshotOfPrimeInterreuptTime) {
-                            lastUnprocessedPrimeInterrupt = 0;
-                            stableState = nowState;
-                            transition = tentative;
-                            wonTheRaceP = true;
-                        }
+        // phase 2: at the end of the lockout window, sample the pin and
+        // report the opposite transition if the edge's state didn't hold
+        // (e.g. a tap released within the window); then clear the lockout
+        uint32_t now = HAL::Ticker::getNumTicks();
+        if ((now - snapshotOfLockout) >= debounceWaitTime) {
+            bool nowState  { gpio.read() };
+            bool wonTheRaceP { false };
+            ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+                if (lockoutStart == snapshotOfLockout && !edgePending) {
+                    lockoutStart = 0;
+                    if (nowState != stableState) {
+                        stableState = nowState;
+                        transition = nowState
+                            ? Transition::RISING
+                            : Transition::FALLING;
                     }
-
-                    if (wonTheRaceP) {
-                        if (transition == Transition::RISING  &&  onRising)  onRising();
-                        if (transition == Transition::FALLING && onFalling) onFalling();
-                    }
+                    wonTheRaceP = true;
                 }
+            }
+            if (wonTheRaceP) {
+                if (transition == Transition::RISING  &&  onRising)  onRising();
+                if (transition == Transition::FALLING && onFalling) onFalling();
             }
         }
         return transition;
@@ -190,7 +212,7 @@ class IntTransitionDebouncer {
     }
 
     bool pendingDebounceTimeout() {
-        return lastUnprocessedPrimeInterrupt > 0;
+        return lockoutStart > 0;
     }
 
 };
