@@ -79,9 +79,13 @@ class RotaryEncoderWithButton {
     re.begin();
     }
 
-    void notifyInterruptOccurred(uint32_t now, uint8_t changed) {
-        btn.notifyInterruptOccurred(now, changed);
-        re.notifyInterruptOccurred(now, changed);
+    // fans out to both children; each filters by its own port, so the
+    // button and the encoder may legitimately live on different ports
+    // (relevant on the ATmega328P, which has three PCINT vectors)
+    void notifyInterruptOccurred(uint32_t now, HAL::GPIO::Port port,
+                                 uint8_t changed) {
+        btn.notifyInterruptOccurred(now, port, changed);
+        re.notifyInterruptOccurred(now, port, changed);
     }
 
     void setOnRelease(Callback fnptr)    {    onRelease = fnptr; }

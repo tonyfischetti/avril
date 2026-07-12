@@ -132,14 +132,24 @@ ISR(PCINT0_vect) {
     uint8_t  changed = current ^ previousPINB;
     previousPINB     = current;
 
-    device.notifyInterruptOccurred(now, changed);   // notify. don't process.
-}
+    device.notifyInterruptOccurred(now, HAL::GPIO::Port::B, changed);
+}                                       // ^ notify. don't process.
 ```
 
 Why `resume(1)` first: if the MCU was in `PWR_DOWN`, Timer0 was stopped and
 `getNumTicks()` would return a stale value; `resume` restarts the clock and
 adds a 1-tick compensation so timestamps taken in the wake-up ISR are sane.
 If the ticker wasn't paused, `resume` does nothing.
+
+The `Port` argument says which port the `changed` mask belongs to, and each
+device drops notifications for ports it doesn't live on. On the ATtiny85
+this is trivia (there is only PORTB). On the ATmega328P it is load-bearing:
+the three ports have three PCINT vectors, and bit positions collide across
+ports — so write one ISR per port you use (each with its own
+`previousPINx`), pass the right `Port`, and you can then spread devices
+across ports freely and notify every device from every ISR without
+cross-talk. The port comparison is against a `constexpr`, so it costs
+nothing when the argument is a compile-time constant.
 
 ## Core modules
 
@@ -164,12 +174,13 @@ BTN::setInputPullup();
 BTN::enablePCINT();               // sets GIMSK/PCICR bit + PCMSK mask
 ```
 
-Everything is `static`; a `GPIO<N>` is a namespace with a type's syntax, and
-each operation compiles to a single `sbi`/`cbi`/`in` where the hardware
-allows it. On the ATtiny85 the register set is resolved entirely at compile
-time. On the ATmega328P the port registers are resolved through a small
-runtime-initialized struct (the `// resolved at runtime :(` comment in the
-source is an honest apology; a fully constexpr mapping is future work).
+Everything is `static`; a `GPIO<N>` is a namespace with a type's syntax.
+Register selection happens entirely at compile time on both MCUs: SFR
+addresses aren't C++ constant expressions, so instead of a pointer table the
+register *lvalue* is chosen by `if constexpr` on the pin's (constexpr) port.
+The result is zero RAM per pin and each operation compiling to a single
+`sbi`/`cbi`/`sbic` where the register is in low I/O space. Power, crystal,
+and other non-GPIO physical pins are rejected by `static_assert`.
 
 ### `ticker.hpp` — 1 kHz millisecond timebase
 

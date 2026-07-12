@@ -64,24 +64,6 @@ constexpr PinInfo pinTable[28] = {
 };
 #endif
 
-struct PinRegisters {
-    volatile uint8_t* ddr;
-    volatile uint8_t* port;
-    volatile uint8_t* pin;
-    volatile uint8_t* pcmsk;
-};
-
-#if defined(__AVR_ATmega328P__)
-inline PinRegisters resolveRegisters(Port port) {
-    switch (port) {
-        case Port::B: return { &DDRB, &PORTB, &PINB, &PCMSK0 };
-        case Port::C: return { &DDRC, &PORTC, &PINC, &PCMSK1 };
-        case Port::D: return { &DDRD, &PORTD, &PIND, &PCMSK2 };
-        default:      return { nullptr, nullptr, nullptr, nullptr };
-    }
-}
-#endif
-
 template<uint8_t physicalPin>
 struct GPIO {
 
@@ -95,20 +77,64 @@ struct GPIO {
 
     static constexpr PinInfo info = pinTable[physicalPin-1];
 
-#if defined(__AVR_ATtiny85__)
-    static inline PinRegisters regs = { &DDRB, &PORTB, &PINB, &PCMSK };
-#elif defined(__AVR_ATmega328P__)
-    // resolved at runtime :(
-    static inline PinRegisters regs = resolveRegisters(info.port);
-#endif
-    static inline uint8_t mask = (1 << info.bit);
+    static_assert(info.port != Port::Invalid,
+            "Physical pin is not a usable GPIO (power/crystal pin)");
 
-    static inline void setOutput() { *(regs.ddr)  |=  mask; }
-    static inline void setInput()  { *(regs.ddr)  &= ~mask; }
-    static inline void setHigh()   { *(regs.port) |=  mask; }
-    static inline void setLow()    { *(regs.port) &= ~mask; }
-    static inline void toggle()    { *(regs.port) ^=  mask; }
-    static inline bool read()      { return *(regs.pin) & mask; }
+    static constexpr uint8_t mask { static_cast<uint8_t>(1 << info.bit) };
+
+  private:
+    // SFR addresses aren't constant expressions, so they can't live in a
+    // constexpr table; instead the register *lvalue* is selected by
+    // if-constexpr on the (constexpr) port. Everything folds at compile
+    // time: no RAM, no indirection, and single-instruction sbi/cbi where
+    // the register is in low I/O space
+    static volatile uint8_t& ddrReg() {
+#if defined(__AVR_ATtiny85__)
+        return DDRB;
+#elif defined(__AVR_ATmega328P__)
+        if constexpr      (info.port == Port::B) return DDRB;
+        else if constexpr (info.port == Port::C) return DDRC;
+        else                                     return DDRD;
+#endif
+    }
+
+    static volatile uint8_t& portReg() {
+#if defined(__AVR_ATtiny85__)
+        return PORTB;
+#elif defined(__AVR_ATmega328P__)
+        if constexpr      (info.port == Port::B) return PORTB;
+        else if constexpr (info.port == Port::C) return PORTC;
+        else                                     return PORTD;
+#endif
+    }
+
+    static volatile uint8_t& pinReg() {
+#if defined(__AVR_ATtiny85__)
+        return PINB;
+#elif defined(__AVR_ATmega328P__)
+        if constexpr      (info.port == Port::B) return PINB;
+        else if constexpr (info.port == Port::C) return PINC;
+        else                                     return PIND;
+#endif
+    }
+
+    static volatile uint8_t& pcmskReg() {
+#if defined(__AVR_ATtiny85__)
+        return PCMSK;
+#elif defined(__AVR_ATmega328P__)
+        if constexpr      (info.port == Port::B) return PCMSK0;
+        else if constexpr (info.port == Port::C) return PCMSK1;
+        else                                     return PCMSK2;
+#endif
+    }
+
+  public:
+    static inline void setOutput() { ddrReg()  |=  mask; }
+    static inline void setInput()  { ddrReg()  &= static_cast<uint8_t>(~mask); }
+    static inline void setHigh()   { portReg() |=  mask; }
+    static inline void setLow()    { portReg() &= static_cast<uint8_t>(~mask); }
+    static inline void toggle()    { portReg() ^=  mask; }
+    static inline bool read()      { return pinReg() & mask; }
 
     static inline void setInputPullup() { setInput(); setHigh(); }
 
@@ -118,7 +144,7 @@ struct GPIO {
 #elif defined(__AVR_ATmega328P__)
         PCICR |= (1 << info.pcicrBit);
 #endif
-        *(regs.pcmsk) |= mask;
+        pcmskReg() |= mask;
     }
 };
 

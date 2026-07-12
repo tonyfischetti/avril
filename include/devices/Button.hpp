@@ -64,8 +64,9 @@ class Button {
         debouncer.begin();
     }
 
-    void notifyInterruptOccurred(uint32_t now, uint8_t changed) {
-        debouncer.notifyInterruptOccurred(now, changed);
+    void notifyInterruptOccurred(uint32_t now, HAL::GPIO::Port port,
+                                 uint8_t changed) {
+        debouncer.notifyInterruptOccurred(now, port, changed);
     }
 
     void setOnRelease(Callback fnptr)   {   onRelease = fnptr; }

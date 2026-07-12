@@ -33,11 +33,16 @@
             uint8_t changed = current ^ previousPINB;
             previousPINB = current;
 
-            sw.notifyInterruptOccurred(now, changed);
+            sw.notifyInterruptOccurred(now, HAL::GPIO::Port::B, changed);
         }
 
  * where `previousPINB` is `volatile uint8_t previousPINB { 0xFF  };`
- * or whatever.
+ * or whatever. The Port argument says which port the `changed` mask
+ * belongs to; the debouncer drops notifications for other ports (bit
+ * positions collide across ports, so this matters on the ATmega328P
+ * where each port has its own PCINT vector -- write one ISR per port
+ * and pass the right Port, and devices can be spread across ports
+ * freely).
  *
  * This notifies the Debouncer that a change happened in the PORT. It
  * supplies the number of ticks in Timer0 (see Ticker.hpp) and a mask
@@ -143,7 +148,13 @@ class IntTransitionDebouncer {
         gpio.enablePCINT();
     }
 
-    void notifyInterruptOccurred(uint32_t now, uint8_t changed) {
+    void notifyInterruptOccurred(uint32_t now, HAL::GPIO::Port port,
+                                 uint8_t changed) {
+        // `changed` is a port-relative mask; bit positions collide across
+        // ports, so a notification for the wrong port must be dropped
+        // here. The comparison is against a constexpr and folds away
+        // when the caller passes a compile-time port (the usual case)
+        if (port != gpio.info.port) return;
         if (changed & gpio.mask) {
             if (!lockoutStart) {
                 lockoutStart = now ? now : 1; // 0 means "idle"
