@@ -76,17 +76,23 @@ uint32_t getNumTicks() {
 }
 
 void pause() {
-    paused = TCCR0B;
-    TCCR0B = 0;
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        // only pause a running timer; a second pause() must not
+        // overwrite the saved prescaler bits with 0
+        if (TCCR0B) {
+            paused = TCCR0B;
+            TCCR0B = 0;
+        }
+    }
 }
 
 void resume(uint16_t compTicks) {
-    if (paused) {
-        ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        if (paused) {
             ticks += compTicks;
+            TCCR0B = paused;
+            paused = 0;
         }
-        TCCR0B = paused;
-        paused = 0;
     }
 }
 
@@ -99,7 +105,5 @@ ISR(TIM0_COMPA_vect) {
 #elif defined(__AVR_ATmega328P__)
 ISR(TIMER0_COMPA_vect) {
 #endif
-    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        HAL::Ticker::ticks++;
-    }
+    HAL::Ticker::ticks = HAL::Ticker::ticks + 1;
 }

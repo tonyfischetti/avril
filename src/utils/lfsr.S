@@ -12,9 +12,16 @@ lfsr_state:
 
 ; ---------------------------------------------------------------------------
 ; void init_lfsr(uint8_t seed);
+;
+; A zero state locks the LFSR at zero forever, so a seed of 0 is replaced
+; with a nonzero default.
 ; ---------------------------------------------------------------------------
 .type init_lfsr, @function
 init_lfsr:
+    tst	   r24
+    brne   1f
+    ldi    r24, 0xA5       ; arbitrary nonzero fallback seed
+1:
     sts	   lfsr_state, r24 ; Save seed value from r24 into lfsr_state
     ret
 
@@ -25,7 +32,7 @@ init_lfsr:
 ; Generates eight bits by calling get_next_bit eight times.
 ; On return:
 ;   r24 = random byte
-;   r16 and r17 is preserved (required by ABI)
+;   r16 and r17 are preserved (call-saved per the ABI)
 ;
 ; originally use `rcall` 8 times... that caused excessive stack usage :(
 ; now uses loop
@@ -52,7 +59,8 @@ get_next_byte:
 ; Generates one bit and:
 ;   - rotates it into r17 through CARRY (so caller must have set up r17)
 ;   - updates lfsr_state
-; Uses only call‑clobbered regs (r16, r18, r19 carry flag) so no pushes.
+; Clobbers r16, r18, r19, and the carry flag. r16 is call-saved in the
+; avr-gcc ABI, but get_next_byte pushes it on our behalf, so no pushes here.
 ; ---------------------------------------------------------------------------
 .type get_next_bit, @function
 get_next_bit:
@@ -67,9 +75,6 @@ get_next_bit:
     eor  r19, r16 ; (r16 >> 3)
     lsr  r16
     eor  r19, r16 ; (r16 >> 4)
-    lsr  r16
-    lsr  r16
-    lsr  r16
     lsr  r19      ; carry flag is the fresh bit!
     ror  r18      ; carry flag is the random bit and r18 is new state
     rol  r17
