@@ -280,10 +280,20 @@ project can print numbers at a human during bring-up, not to be a serial
 framework. Compiles to nothing on the ATtiny85 (no USART).
 
 ```cpp
-HAL::UART::init<9600>();          // baud is a template param; UBRR is constexpr
-HAL::UART::println("booted");
-HAL::UART::print(someUint32);     // snprintf-backed; pulls in stdio, ~1-2 KB
+HAL::UART::init<115200>();        // baud is a template parameter
+HAL::UART::println("booted");     // println appends \r\n
+HAL::UART::print("ticks: ");
+HAL::UART::println(someUint32);   // snprintf-backed; pulls in stdio, ~1-2 KB
 ```
+
+The baud divisor is computed at compile time with proper rounding, and
+double-speed mode (U2X) is selected automatically when it halves the rate
+error — which is what makes 115200 @ 16 MHz actually work (naive truncated
+math lands 8.5% off; rounded U2X lands within 2.1%). A rate that can't be
+achieved within 2.5%, or that overflows the 12-bit UBRR register, is a
+**compile error**, in the same spirit as the Ticker refusing an inexact
+millisecond: a baud rate that's silently wrong is worse than one that
+doesn't build.
 
 Mind that `print(uint32_t)` drags `snprintf` into flash; on a tight build,
 that's the first thing to go.
