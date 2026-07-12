@@ -10,6 +10,7 @@
 namespace HAL {
 namespace Sleep {
 
+__attribute__((always_inline))
 inline void goToSleep(uint8_t mode) {
     cli();
     // avr-libc's set_sleep_mode macro internally negates a mask,
