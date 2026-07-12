@@ -128,6 +128,7 @@ class Button {
                     btnAction =  ButtonAction::RELEASE;
                 }
             } else {
+                lastPressed = now;
                 if (onPress) onPress();
                 btnAction = ButtonAction::PRESS;
             }
@@ -138,8 +139,10 @@ class Button {
 
 
     bool pendingDebounceTimeout() {
-        //  TODO  AND IF HELD DOWN!
-        return debouncer.pendingDebounceTimeout() || !debouncer.getStableState();
+        // second term: stay awake while the button is held (pressed =
+        // away from passiveState), so the long-press timer keeps running
+        return debouncer.pendingDebounceTimeout() ||
+               (debouncer.getStableState() != passiveState);
     }
 
 };
