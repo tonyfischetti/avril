@@ -90,7 +90,11 @@ inline void printByte(uint8_t data) {
     UDR0 = data;
 }
 
-inline void print(const char* str) {
+// `inline` here is for linkage (header definition), not a request to
+// inline: a byte-at-a-time busy-wait loop should exist once and be
+// called. noinline documents that intent and keeps -Winline quiet once
+// there are enough call sites that GCC stops inlining it anyway
+__attribute__((noinline)) inline void print(const char* str) {
     while (*str) {
         printByte(static_cast<uint8_t>(*str++));
     }

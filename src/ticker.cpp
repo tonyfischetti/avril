@@ -75,6 +75,52 @@ uint32_t getNumTicks() {
     return value;
 }
 
+/**
+ * Microseconds since boot: the millisecond tick count combined with the
+ * live TCNT0 fraction. Resolution is prescaler/MHz microseconds per
+ * count (8 us at 8 MHz / 64, 4 us at 16 MHz / 64).
+ *
+ * Wraps every ~71.6 minutes; consumers must compare timestamps with
+ * unsigned subtraction. Only meaningful while the ticker is running --
+ * a paused timer returns a frozen value.
+ */
+uint32_t getMicros() {
+    constexpr int prescaler_index = findValidPrescalerIndex();
+    static_assert(prescaler_index >= 0,
+            "No valid prescaler found for exact 1ms tick with F_CPU");
+    static_assert(F_CPU % 1000000UL == 0,
+            "getMicros() needs an integer-MHz F_CPU");
+    constexpr uint32_t mhz = F_CPU / 1000000UL;
+    constexpr uint32_t usPerCount =
+        prescaler_options[prescaler_index].prescaler / mhz;
+    static_assert(usPerCount * mhz ==
+            prescaler_options[prescaler_index].prescaler,
+            "Timer0 count period is not a whole number of microseconds");
+
+    uint32_t ms;
+    uint8_t  count;
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        ms    = ticks;
+        count = TCNT0;
+        // a compare match may be pending that the tick ISR hasn't yet
+        // credited to `ticks`: either it landed after ATOMIC_BLOCK's
+        // cli, or we were called from an ISR (interrupts already off,
+        // so the tick ISR can't run). Credit the missing millisecond
+        // and re-read the now-post-wrap counter. A flag left pending
+        // for more than one full period (interrupts off > 1 ms) is
+        // indistinguishable from this and under-reports by the excess
+#if defined(__AVR_ATtiny85__)
+        if (TIFR & (1 << OCF0A)) {
+#elif defined(__AVR_ATmega328P__)
+        if (TIFR0 & (1 << OCF0A)) {
+#endif
+            ms++;
+            count = TCNT0;
+        }
+    }
+    return ms * 1000UL + static_cast<uint32_t>(count) * usPerCount;
+}
+
 void pause() {
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         // only pause a running timer; a second pause() must not

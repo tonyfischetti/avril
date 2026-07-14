@@ -200,6 +200,28 @@ uint32_t now = HAL::Ticker::getNumTicks();   // atomic 32-bit read
 `getNumTicks()` wraps after ~49.7 days; consumers must compare timestamps
 with unsigned subtraction (`now - then >= window`), which is wrap-safe.
 
+For measurements finer than a millisecond there is `getMicros()`, which
+combines the tick count with the live `TCNT0` value — sub-millisecond
+information the timer hardware generates anyway:
+
+```cpp
+uint32_t nowUs = HAL::Ticker::getMicros();   // 8 us resolution at 8 MHz
+```
+
+Resolution is `prescaler / MHz` microseconds per count (8 µs at 8 MHz / 64,
+4 µs at 16 MHz / 64). It handles the classic `micros()` race — a compare
+match that fires after interrupts are disabled (or while executing inside an
+ISR, where the tick ISR cannot run) leaves `ticks` stale by one; the pending
+`OCF0A` flag is checked and the missing millisecond credited manually — so
+it is safe to call from ISR context. Three caveats: it wraps every ~71.6
+minutes (same wrap-safe subtraction rule); it is *resolution*, not
+*accuracy* (the timebase is still your clock source — an internal RC
+oscillator is a few percent off nominal, which cancels out when comparing
+intervals against each other but makes this no wall clock); and it is
+meaningless while the ticker is paused. If interrupts stay disabled for more
+than one full millisecond, the excess beyond the first pending tick cannot
+be detected and the result under-reports — don't do that.
+
 The pause/resume pair exists for `SLEEP_MODE_PWR_DOWN`, which stops Timer0's
 clock:
 
