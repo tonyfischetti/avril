@@ -9,8 +9,8 @@
 
 
 /**
- * Blocking, transmit-oriented debug UART (ATmega328P only; the ATtiny85
- * has no USART).
+ * Blocking, transmit-oriented debug UART (ATmega328P only; the ATtiny84
+ * and ATtiny85 have no USART).
  *
  * The baud divisor is computed at compile time with proper rounding, and
  * double-speed mode (U2X) is selected automatically when it gives a
@@ -23,9 +23,10 @@
 namespace HAL {
 namespace UART {
 
-#if defined(__AVR_ATtiny85__)
-// #warning "HAL::UART is not supported on ATtiny85"
-#else
+// compile only where a USART exists: an allow-list, not a deny-list,
+// so a newly supported MCU without a USART gets an empty namespace
+// instead of a wall of undefined-register errors
+#if defined(__AVR_ATmega328P__)
 
 namespace detail {
 

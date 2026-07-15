@@ -61,7 +61,7 @@ void setupMSTimer() {
 
 #if defined(__AVR_ATtiny85__)
     TIMSK |= (1 << OCIE0A);
-#elif defined(__AVR_ATmega328P__)
+#elif defined(__AVR_ATtiny84__) || defined(__AVR_ATmega328P__)
     TIMSK0 |= (1 << OCIE0A);
 #endif
 
@@ -111,7 +111,7 @@ uint32_t getMicros() {
         // indistinguishable from this and under-reports by the excess
 #if defined(__AVR_ATtiny85__)
         if (TIFR & (1 << OCF0A)) {
-#elif defined(__AVR_ATmega328P__)
+#elif defined(__AVR_ATtiny84__) || defined(__AVR_ATmega328P__)
         if (TIFR0 & (1 << OCF0A)) {
 #endif
             ms++;
@@ -146,7 +146,7 @@ void resume(uint16_t compTicks) {
 }
 
 
-#if defined(__AVR_ATtiny85__)
+#if defined(__AVR_ATtiny85__) || defined(__AVR_ATtiny84__)
 ISR(TIM0_COMPA_vect) {
 #elif defined(__AVR_ATmega328P__)
 ISR(TIMER0_COMPA_vect) {

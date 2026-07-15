@@ -67,17 +67,18 @@ the whole input stack is designed so a project can drop into
 `SLEEP_MODE_PWR_DOWN` between events and `SLEEP_MODE_IDLE` between animation
 frames. Battery projects are the intended audience.
 
-**5. Only two MCUs, checked at compile time.**
-`common.hpp` refuses to compile for anything but the ATtiny85 and
-ATmega328P. Supporting "all AVRs" is how HALs become the complicated thing
-this library's tagline is making fun of. Where the two chips differ
+**5. Only three MCUs, checked at compile time.**
+`common.hpp` refuses to compile for anything but the ATtiny84, ATtiny85,
+and ATmega328P. Supporting "all AVRs" is how HALs become the complicated
+thing this library's tagline is making fun of. Where the chips differ
 (register names, ISR vectors, pin tables), the difference is handled in one
 `#if` per module, not an abstraction layer.
 
 ## Requirements and setup
 
 - avr-gcc with C++20 support (`-std=gnu++2a`; developed against avr-gcc 12–14)
-- `-mmcu=attiny85` or `-mmcu=atmega328p`
+- `-mmcu=attiny85`, `-mmcu=attiny84`, or `-mmcu=atmega328p` (an ATtiny84A
+  builds as `-mmcu=attiny84`; same registers, different compiler macro)
 - `F_CPU` defined (the Ticker `static_assert`s that an exact 1 ms divisor exists for it)
 - Recommended: `-Os -flto -ffunction-sections -fdata-sections -Wl,--gc-sections`
 
@@ -143,12 +144,12 @@ If the ticker wasn't paused, `resume` does nothing.
 
 The `Port` argument says which port the `changed` mask belongs to, and each
 device drops notifications for ports it doesn't live on. On the ATtiny85
-this is trivia (there is only PORTB). On the ATmega328P it is load-bearing:
-the three ports have three PCINT vectors, and bit positions collide across
-ports — so write one ISR per port you use (each with its own
-`previousPINx`), pass the right `Port`, and you can then spread devices
-across ports freely and notify every device from every ISR without
-cross-talk. The port comparison is against a `constexpr`, so it costs
+this is trivia (there is only PORTB). On the ATtiny84 (PA/PB, with
+`PCINT0_vect`/`PCINT1_vect` respectively) and the ATmega328P (three ports,
+three vectors) it is load-bearing: bit positions collide across ports — so
+write one ISR per port you use (each with its own `previousPINx`), pass the
+right `Port`, and you can then spread devices across ports freely and
+notify every device from every ISR without cross-talk. The port comparison is against a `constexpr`, so it costs
 nothing when the argument is a compile-time constant.
 
 ## Core modules
@@ -175,7 +176,7 @@ BTN::enablePCINT();               // sets GIMSK/PCICR bit + PCMSK mask
 ```
 
 Everything is `static`; a `GPIO<N>` is a namespace with a type's syntax.
-Register selection happens entirely at compile time on both MCUs: SFR
+Register selection happens entirely at compile time on all three MCUs: SFR
 addresses aren't C++ constant expressions, so instead of a pointer table the
 register *lvalue* is chosen by `if constexpr` on the pin's (constexpr) port.
 The result is zero RAM per pin and each operation compiling to a single
@@ -299,7 +300,7 @@ silently fail.
 
 Blocking, transmit-oriented, deliberately primitive — it exists so a 328P
 project can print numbers at a human during bring-up, not to be a serial
-framework. Compiles to nothing on the ATtiny85 (no USART).
+framework. Compiles to nothing on the ATtiny84 and ATtiny85 (no USART).
 
 ```cpp
 HAL::UART::init<115200>();        // baud is a template parameter
@@ -533,8 +534,9 @@ the ISR must `Ticker::resume()` before reading time).
 
 ## Known limitations
 
-- **Two MCUs only**, by design. Porting to another AVR means extending the
-  pin table, the ISR vector `#if`s, and the watchdog/UART register names.
+- **Three MCUs only**, by design. Porting to another AVR means extending
+  the pin table, the ISR vector `#if`s, and the watchdog/UART register
+  names. (The ATtiny84 port was exactly this list and ~60 lines.)
 - **One debounced event in flight per pin.** The debouncer holds a single
   edge; edges during the lockout are treated as bounce, period. This is
   correct for human-speed inputs and wrong for burst signals — don't use it

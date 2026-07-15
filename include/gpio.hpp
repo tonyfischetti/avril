@@ -11,7 +11,7 @@
 namespace HAL {
 namespace GPIO {
 
-enum class Port : uint8_t { B, C, D, Invalid };
+enum class Port : uint8_t { A, B, C, D, Invalid };
 
 struct PinInfo {
     Port port;
@@ -30,6 +30,27 @@ constexpr PinInfo pinTable[8] = {
     { Port::B, 1, 1, PCIE },          //  6 PB1
     { Port::B, 2, 2, PCIE },          //  6 PB2
     { Port::Invalid, 0, 0xFF, 0xFF }, //  8 VCC
+};
+#elif defined(__AVR_ATtiny84__)
+// PA0-7 are PCINT0-7 (PCMSK0, PCIE0, PCINT0_vect);
+// PB0-3 are PCINT8-11 (PCMSK1, PCIE1, PCINT1_vect).
+// PCMSK1 bit positions coincide with the PB bit numbers, so `mask`
+// serves both the port registers and the PCINT mask register
+constexpr PinInfo pinTable[14] = {
+    { Port::Invalid, 0, 0xFF, 0xFF }, //  1 VCC
+    { Port::B, 0,  8, PCIE1 },        //  2 PB0 (XTAL1)
+    { Port::B, 1,  9, PCIE1 },        //  3 PB1 (XTAL2)
+    { Port::B, 3, 11, PCIE1 },        //  4 PB3 (RESET)
+    { Port::B, 2, 10, PCIE1 },        //  5 PB2
+    { Port::A, 7,  7, PCIE0 },        //  6 PA7
+    { Port::A, 6,  6, PCIE0 },        //  7 PA6
+    { Port::A, 5,  5, PCIE0 },        //  8 PA5
+    { Port::A, 4,  4, PCIE0 },        //  9 PA4
+    { Port::A, 3,  3, PCIE0 },        // 10 PA3
+    { Port::A, 2,  2, PCIE0 },        // 11 PA2
+    { Port::A, 1,  1, PCIE0 },        // 12 PA1
+    { Port::A, 0,  0, PCIE0 },        // 13 PA0
+    { Port::Invalid, 0, 0xFF, 0xFF }, // 14 GND
 };
 #elif defined(__AVR_ATmega328P__)
 constexpr PinInfo pinTable[28] = {
@@ -70,6 +91,9 @@ struct GPIO {
 #if defined(__AVR_ATtiny85__)
     static_assert(physicalPin >= 1 && physicalPin <= 8,
             "Invalid pin number for ATTiny85");
+#elif defined(__AVR_ATtiny84__)
+    static_assert(physicalPin >= 1 && physicalPin <= 14,
+            "Invalid pin number for ATTiny84");
 #elif defined(__AVR_ATmega328P__)
     static_assert(physicalPin >= 1 && physicalPin <= 28,
             "Invalid pin number for ATMega328P");
@@ -91,6 +115,9 @@ struct GPIO {
     static volatile uint8_t& ddrReg() {
 #if defined(__AVR_ATtiny85__)
         return DDRB;
+#elif defined(__AVR_ATtiny84__)
+        if constexpr (info.port == Port::A) return DDRA;
+        else                                return DDRB;
 #elif defined(__AVR_ATmega328P__)
         if constexpr      (info.port == Port::B) return DDRB;
         else if constexpr (info.port == Port::C) return DDRC;
@@ -101,6 +128,9 @@ struct GPIO {
     static volatile uint8_t& portReg() {
 #if defined(__AVR_ATtiny85__)
         return PORTB;
+#elif defined(__AVR_ATtiny84__)
+        if constexpr (info.port == Port::A) return PORTA;
+        else                                return PORTB;
 #elif defined(__AVR_ATmega328P__)
         if constexpr      (info.port == Port::B) return PORTB;
         else if constexpr (info.port == Port::C) return PORTC;
@@ -111,6 +141,9 @@ struct GPIO {
     static volatile uint8_t& pinReg() {
 #if defined(__AVR_ATtiny85__)
         return PINB;
+#elif defined(__AVR_ATtiny84__)
+        if constexpr (info.port == Port::A) return PINA;
+        else                                return PINB;
 #elif defined(__AVR_ATmega328P__)
         if constexpr      (info.port == Port::B) return PINB;
         else if constexpr (info.port == Port::C) return PINC;
@@ -121,6 +154,9 @@ struct GPIO {
     static volatile uint8_t& pcmskReg() {
 #if defined(__AVR_ATtiny85__)
         return PCMSK;
+#elif defined(__AVR_ATtiny84__)
+        if constexpr (info.port == Port::A) return PCMSK0;
+        else                                return PCMSK1;
 #elif defined(__AVR_ATmega328P__)
         if constexpr      (info.port == Port::B) return PCMSK0;
         else if constexpr (info.port == Port::C) return PCMSK1;
@@ -139,7 +175,9 @@ struct GPIO {
     static inline void setInputPullup() { setInput(); setHigh(); }
 
     static inline void enablePCINT() {
-#if defined(__AVR_ATtiny85__)
+        // the tinys put the enable bits in GIMSK, the 328P in PCICR;
+        // pcicrBit is per-port everywhere except the tiny85 (one port)
+#if defined(__AVR_ATtiny85__) || defined(__AVR_ATtiny84__)
         GIMSK |= (1 << info.pcicrBit);
 #elif defined(__AVR_ATmega328P__)
         PCICR |= (1 << info.pcicrBit);

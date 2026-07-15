@@ -101,7 +101,7 @@ struct Watchdog {
 #if defined(__AVR_ATtiny85__)
         WDTCR |= (1 << WDCE) | (1 << WDE);
         WDTCR = 0x00;
-#elif defined(__AVR_ATmega328P__)
+#elif defined(__AVR_ATtiny84__) || defined(__AVR_ATmega328P__)
         WDTCSR |= (1 << WDCE) | (1 << WDE);  // start timed sequence
         WDTCSR = 0x00;                       // Disable WDT
 #endif
@@ -115,7 +115,7 @@ struct Watchdog {
 #if defined(__AVR_ATtiny85__)
         WDTCR |= (1 << WDCE) | (1 << WDE);
         WDTCR = (1 << WDIE) | prescaler_bits;
-#elif defined(__AVR_ATmega328P__)
+#elif defined(__AVR_ATtiny84__) || defined(__AVR_ATmega328P__)
         WDTCSR |= (1 << WDCE) | (1 << WDE);
         WDTCSR = (1 << WDIE) | prescaler_bits;
 #endif
