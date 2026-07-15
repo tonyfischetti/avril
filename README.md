@@ -112,13 +112,33 @@ these rules, so they are now the rules:
 2. **`process()` / `processAnyInterrupts()` run only in main-loop context.**
    User callbacks therefore also run only in main-loop context, so ordinary
    application state touched by callbacks needs no `volatile` and no atomics.
-3. **The debouncer is the only object that lives on the ISR/main boundary**,
-   and it internally uses `ATOMIC_BLOCK` claim sections for every
-   cross-context handoff. If you find yourself wanting to share anything else
-   across that boundary, either route it through a debouncer-style claim or
-   reconsider.
+3. **Objects that live on the ISR/main boundary use `ATOMIC_BLOCK` claim
+   sections for every cross-context handoff** — the debouncer and the
+   rotary encoder's step accumulator are the residents. If you find
+   yourself wanting to share anything else across that boundary, either
+   route it through a claim of the same shape or reconsider.
 4. **Anything checked before sleeping must be re-checked with interrupts
    disabled.** See [the canonical main loop](#putting-it-together-the-canonical-main-loop).
+
+**The sanctioned exception: ISR-side decoders.** Rule 2 pushes state
+machines into the main loop, and for buttons that is strictly better. But
+some signals carry their information in the *instant* of the edge — the
+phase relationship between a quadrature encoder's two channels, the width
+of a protocol pulse — and that information is already stale by the time
+the main loop runs. For those, the decode itself may run in the ISR,
+provided three invariants hold:
+
+1. the decoder's working state is touched from **ISR context only**;
+2. results cross to the main loop through a single **atomic claim** (a
+   counter or a latch, consumed under `ATOMIC_BLOCK` in `process()`);
+3. callbacks still fire **only from `process()`** — never from the ISR.
+
+The contract's actual purpose — one writer per datum, no two-context
+mutation — survives intact; only the *location* of the state machine
+moves. `RotaryEncoder` is the resident example (its Gray-code table folds
+each edge into a signed quarter-step accumulator in the ISR), and any
+future pulse-timing decoder (IR remotes, for instance) should take the
+same shape.
 
 The canonical pin-change ISR looks like this (one per port; `PCINT0_vect`
 shown):
@@ -443,23 +463,58 @@ Quadrature decoding for detented mechanical encoders (KY-040 style):
 ```cpp
 HAL::Devices::RotaryEncoder<7,      // CLK pin
                             2,      // DT pin
-                            0,      // debounce window (0 = detents debounce themselves)
-                            HIGH,   // passive state
+                            0,      // vestigial (was: debounce window)
+                            HIGH,   // vestigial (was: passive state)
                             true>   // pullups
-    re;
+    re;                             // + reverseP and stepsPerDetent
+                                    //   template params, defaulted
 
 re.setOnCW([]  { /* clockwise detent */ });
 re.setOnCCW([] { /* counterclockwise detent */ });
 ```
 
-Decoding strategy: only CLK is debounced/watched; on a falling CLK edge, DT
-is sampled, and its level gives the direction. This is the cheapest correct
-decode for full-cycle-per-detent encoders — no state table needed, because
-the detent mechanism itself guarantees the phases settle between clicks. A
-`reverseP` template parameter flips the direction convention rather than
-making you swap wires. The immediate-report debouncer helps here twice: the
-direction sample happens close to the edge (DT is unambiguous there), and a
-`debounceWaitTime` of 0 collapses to "process every edge."
+Decoding strategy: a Gray-code transition table, run **in the ISR**, per
+the sanctioned-exception rules above. Both channels' PCINTs are enabled;
+on every edge of either channel, `notifyInterruptOccurred` reads the live
+(CLK, DT) pair, looks up the transition `(previous → current)` in a
+16-entry table, and adds the result — +1, −1, or 0 quarter-steps — to a
+signed accumulator. `process()` atomically claims whole detents
+(`stepsPerDetent` quarter-steps, default 4 = one full electrical cycle,
+correct for KY-040-style parts) and fires `onCW`/`onCCW` in main-loop
+context.
+
+This replaced a simpler decoder (sample DT in `process()` when CLK
+falls) that had a real failure mode: **direction lives in the
+instantaneous phase relationship of the two channels**, and at fast
+rotation the quadrature quarter-period shrinks to about the main loop's
+latency — so by the time `process()` sampled DT, it read the *next*
+phase and stepped backwards. The second failure was subtler: the old
+path derived edge polarity by toggling a remembered state, so one
+dropped CLK edge inverted its worldview until the *next* dropped edge
+flipped it back. The table decoder is immune to both by construction:
+
+- it reads **live pin levels** on every edge, never a toggled guess, so
+  it resynchronizes to reality at every single transition;
+- a missed intermediate state shows up as a two-bit jump, which the
+  table maps to 0 — one quarter-step lost, never a reversed one;
+- **contact bounce needs no debouncing at all**: a bounce retraces
+  adjacent table transitions (+1 then −1) and cancels arithmetically in
+  the accumulator before anything reaches a callback. This is why the
+  `debounceWaitTime` and `passiveState` parameters are vestigial — they
+  are kept only so existing instantiations keep compiling;
+- direction reversals mid-cycle likewise cancel; only completed detents
+  ever surface.
+
+The accumulator saturates at ±120 quarter-steps rather than wrapping
+(an int8_t wrap would replay as ~32 phantom detents in the wrong
+direction). `pendingDebounceTimeout()` is kept for sleep-gate
+compatibility but is no longer timed — nothing in the decoder reads the
+Ticker. It reports true while a *complete* detent is banked and
+unclaimed; a partial cycle is not "pending," because its remaining edges
+wake the MCU by themselves. A `reverseP` template parameter flips the
+direction convention rather than making you swap wires; the table's sign
+convention matches the old decoder, so existing wiring keeps its
+meaning.
 
 ### `RotaryEncoderWithButton`
 
@@ -469,7 +524,7 @@ encoder invites:
 ```cpp
 HAL::Devices::RotaryEncoderWithButton<
     3, 30, 1000, HIGH, true,     // button:  pin, debounce, long-press, passive, pullup
-    7, 2, 0, HIGH, true          // encoder: clk, dt, debounce, passive, pullup
+    7, 2, 0, HIGH, true          // encoder: clk, dt, (vestigial ×2), pullup
 > knob;
 
 knob.begin();
@@ -537,10 +592,12 @@ the ISR must `Ticker::resume()` before reading time).
 - **Three MCUs only**, by design. Porting to another AVR means extending
   the pin table, the ISR vector `#if`s, and the watchdog/UART register
   names. (The ATtiny84 port was exactly this list and ~60 lines.)
-- **One debounced event in flight per pin.** The debouncer holds a single
-  edge; edges during the lockout are treated as bounce, period. This is
-  correct for human-speed inputs and wrong for burst signals — don't use it
-  as a general edge-capture facility.
+- **One debounced event in flight per pin** (buttons). The debouncer holds
+  a single edge; edges during the lockout are treated as bounce, period.
+  This is correct for human-speed presses and wrong for burst signals —
+  don't use it as a general edge-capture facility. (The rotary encoder
+  used to route through it and suffered for exactly this reason; it now
+  decodes ISR-side and doesn't use the debouncer at all.)
 - **Timer0 belongs to the Ticker.** If your project needs Timer0 for PWM,
   you don't get a millisecond timebase (or you port the Ticker to another
   timer).
