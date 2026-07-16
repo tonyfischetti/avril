@@ -19,6 +19,7 @@ ATMega328P.
   - [`ticker.hpp` — 1 kHz millisecond timebase](#tickerhpp--1-khz-millisecond-timebase)
   - [`sleep.hpp` — sleep-mode helper](#sleephpp--sleep-mode-helper)
   - [`watchdog.hpp` — timed wake-ups from power-down](#watchdoghpp--timed-wake-ups-from-power-down)
+  - [`spi.hpp` — blocking SPI master](#spihpp--blocking-spi-master)
   - [`uart.hpp` — debug serial (ATmega328P only)](#uarthpp--debug-serial-atmega328p-only)
 - [Utils](#utils)
   - [`IntTransitionDebouncer` — interrupt-driven debouncing](#inttransitiondebouncer--interrupt-driven-debouncing)
@@ -357,6 +358,61 @@ is an RC circuit — expect ±10%, drifting with voltage and temperature.
 for "auto-off after ten minutes" and exactly wrong for timekeeping. The
 Ticker credit keeps `getNumTicks()` *roughly* monotonic across sleeps,
 not accurate.
+
+### `spi.hpp` — blocking SPI master
+
+SPI is barely a protocol — a shift register with a clock — which makes the
+master side the easiest bus there is, and the gateway to SD cards, displays,
+and CAN (via MCP2515). All three MCUs are supported, each through its own
+silicon:
+
+```cpp
+using Spi = HAL::SPI::Master<400000>;   // ceiling in Hz; optional Mode and
+                                        // BitOrder template params follow
+using CS  = HAL::GPIO::GPIO<16>;        // chip select is YOUR problem
+
+Spi::begin();
+CS::setOutput(); CS::setHigh();
+
+CS::setLow();
+uint8_t id { Spi::transfer(0x9F) };     // full duplex: byte out, byte in
+Spi::write(0x42);                       // don't care what comes back
+uint8_t b  { Spi::read() };             // clocks out 0xFF, returns the reply
+CS::setHigh();
+```
+
+Design notes, in the usual spirit:
+
+- **`maxHz` is a ceiling, not a promise** — the fastest achievable rate at
+  or below it is chosen at compile time. On the 328P that's the smallest
+  hardware divider that fits (`/2` … `/128`, SPI2X included); asking for
+  slower than `F_CPU/128` fails the build, UART-style. On the tinies the
+  strobe loop's natural rate is ~`F_CPU/12`, and compile-time delay padding
+  (`__builtin_avr_delay_cycles`) is inserted only when the ceiling demands
+  slower — e.g. an SD card's 400 kHz initialization phase.
+- **`transfer()` cannot hang.** The master generates the clock, so unlike
+  I²C or SD-card waits there is nothing to time out on. Blocking is safe
+  here, not just simple.
+- **CS is not managed** — chip select is a per-*device* concern, not a
+  per-bus one; drive it with a `GPIO<pin>` (low = selected on virtually
+  everything).
+- **Backends.** The 328P uses the hardware SPI peripheral: all four modes,
+  both bit orders, fixed pins MOSI=PB3(17)/MISO=PB4(18)/SCK=PB5(19). Beware
+  **the SS trap**: in master mode, if SS (PB2, pin 16) is an *input* and
+  anything pulls it low, the hardware silently demotes the peripheral to
+  slave. `begin()` therefore sets SS as an output; it remains usable as an
+  ordinary GPIO — a device's CS, even. The tinies use the **USI in
+  three-wire mode** with a software-strobed clock (the datasheet's own SPI
+  master recipe): modes 0/1 only, MSB-first only — that's all the USI can
+  do, and asking for more is a `static_assert` failure, not a silent
+  reinterpretation. USI pins are fixed: tiny85 DO=PB1(6)/DI=PB0(5)/
+  USCK=PB2(7); tiny84 DO=PA5(8)/DI=PA6(7)/USCK=PA4(9). Note DO/DI are the
+  USI's names: DO is this chip's output (→ slave's MOSI), DI its input
+  (← slave's MISO).
+- **Master only.** SPI slave has no flow control — the master clocks when
+  it pleases and an unserviced byte is simply lost — so an AVR-as-SPI-slave
+  needs an interrupt-driven design that this deliberately isn't. (Contrast
+  I²C slave, where clock stretching makes the hardware wait for you.)
 
 ### `uart.hpp` — debug serial (ATmega328P only)
 
@@ -708,3 +764,6 @@ the ISR must `Ticker::resume()` before reading time).
   are wrap-safe; keep yours wrap-safe too (`now - then >= window`, never
   `now >= then + window`).
 - **UART is TX-oriented and blocking**; RX is enabled but nothing reads it.
+- **SPI is master-only and blocking** (deliberately — see its section);
+  slave mode would need an interrupt-driven design the USI and SPI
+  peripherals support but this module doesn't attempt.
