@@ -447,7 +447,14 @@ Semantics worth knowing:
   press-and-hold UI.
 - By default a long-press **suppresses the following release event**
   (`supressReleaseAfterLongPress`), so one physical gesture doesn't fire two
-  logical actions. Disable via template parameter if you want both.
+  logical actions. Disable via template parameter if you want both. The
+  parameter governs only whether a long-press *arms* the suppression;
+  external arming (next bullet) works regardless.
+- `suppressNextReleaseEvent()` arms the same suppression from outside.
+  `RotaryEncoderWithButton` calls it when rotation happens while pressed,
+  so the release that ends a chorded gesture doesn't also register as a
+  click. The Button is deliberately the *single owner* of this flag — see
+  the composite's section for the bug that motivated that.
 - `allowConsecutiveLongPresses` (default off) controls whether continuing to
   hold fires repeated long-presses.
 - Works with either polarity (`passiveState` HIGH for pull-up wiring, LOW
@@ -537,7 +544,25 @@ knob.setOnLongPress(...);
 The one piece of real logic it owns: **rotating while pressed suppresses the
 next release**. Without this, "press + rotate + let go" would fire the
 release action (whatever "click" means in your UI) after every chorded
-gesture. `notifyInterruptOccurred` fans out to both children, so the ISR
+gesture. The suppression flag lives in the *Button* (armed via
+`suppressNextReleaseEvent()`), not here — the Button already owns an
+identical flag for its suppress-release-after-long-press rule, and the two
+must be one flag. When the composite kept its own copy, a chorded gesture
+held past the long-press threshold armed **both**; the one physical release
+cleared only the Button's, and the composite's stale copy silently ate the
+release of the *next* ordinary press. The user-visible symptom: after a
+press-and-turn lasting more than the long-press threshold, the next click
+does nothing and it "takes two presses."
+
+Ordering inside `process()` also matters: **button events are reported
+before a rotary detent is claimed**. The encoder banks its detents, so one
+deferred to the next loop iteration (they run at kHz rates) loses nothing —
+but a button event is consumed from the debouncer the moment
+`btn.process()` returns it. The old code preferred the rotary action and
+simply dropped a PRESS or RELEASE that coincided with a banked detent; a
+dropped RELEASE left suppression state stale the same way.
+
+`notifyInterruptOccurred` fans out to both children, so the ISR
 only deals with one object; `pendingDebounceTimeout()` ORs the children, so
 the sleep gate does too.
 

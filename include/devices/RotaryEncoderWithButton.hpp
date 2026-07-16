@@ -51,7 +51,6 @@ class RotaryEncoderWithButton {
                                 reUsePullup,
                                 reReverseP> re;
 
-    bool     suppressNextRelease;
     Callback onRelease;
     Callback onPress;
     Callback onLongPress;
@@ -64,7 +63,6 @@ class RotaryEncoderWithButton {
     RotaryEncoderWithButton()
         : btn                 {         },
           re                  {         },
-          suppressNextRelease {   false },
           onRelease           { nullptr },
           onPress             { nullptr },
           onLongPress         { nullptr },
@@ -97,30 +95,14 @@ class RotaryEncoderWithButton {
     void setOnPressedCCW(Callback fnptr) { onPressedCCW = fnptr; }
 
     REWithButtonAction process() {
-        ButtonAction btnAction       {        btn.process() };
-        RotaryEncoderAction reAction {         re.process() };
-        bool btnStableState          { btn.getStableState() };
-
-        if (reAction == RotaryEncoderAction::CW) {
-            // if pressed
-            if (btnStableState != btnPassiveState) {
-                suppressNextRelease = true;
-                if (onPressedCW) onPressedCW();
-                return REWithButtonAction::PRESSED_CW;
-            }
-            // not pressed
-            if (onCW) onCW();
-            return REWithButtonAction::CW;
-        }
-        if (reAction == RotaryEncoderAction::CCW) {
-            if (btnStableState != btnPassiveState) {
-                suppressNextRelease = true;
-                if (onPressedCCW) onPressedCCW();
-                return REWithButtonAction::PRESSED_CCW;
-            }
-            if (onCCW) onCCW();
-            return REWithButtonAction::CCW;
-        }
+        // button events take priority over rotary detents, and the order
+        // matters: the encoder *banks* its detents, so one deferred to
+        // the next loop iteration (kHz rates) loses nothing -- but a
+        // button event is consumed from the debouncer the moment
+        // btn.process() returns it, so preferring the rotary action (as
+        // this used to) silently dropped any PRESS/RELEASE that happened
+        // to coincide with a banked detent
+        ButtonAction btnAction { btn.process() };
         if (btnAction == ButtonAction::LONG_PRESS) {
             if (onLongPress) onLongPress();
             return REWithButtonAction::LONG_PRESS;
@@ -130,14 +112,44 @@ class RotaryEncoderWithButton {
             return REWithButtonAction::PRESS;
         }
         if (btnAction == ButtonAction::RELEASE) {
-            if (suppressNextRelease) {
-                suppressNextRelease = false;
-                return REWithButtonAction::NONE;
-            }
+            // suppression of the release that ends a chorded gesture
+            // already happened inside the Button (see
+            // suppressNextReleaseEvent below); a RELEASE that reaches
+            // this point is a genuine click
             if (onRelease) onRelease();
             return REWithButtonAction::RELEASE;
         }
-        return REWithButtonAction::NONE;
+
+        RotaryEncoderAction reAction { re.process() };
+        if (reAction == RotaryEncoderAction::NONE) {
+            return REWithButtonAction::NONE;
+        }
+
+        bool pressedP { btn.getStableState() != btnPassiveState };
+        if (pressedP) {
+            // the chord's release must not also fire onRelease. The
+            // suppression flag lives in the Button -- its long-press
+            // logic arms the same flag, and keeping a second copy here
+            // caused a bug: a chord held past the long-press threshold
+            // armed both, one release cleared only the Button's, and the
+            // stale composite flag ate the next ordinary click's release
+            btn.suppressNextReleaseEvent();
+        }
+
+        if (reAction == RotaryEncoderAction::CW) {
+            if (pressedP) {
+                if (onPressedCW) onPressedCW();
+                return REWithButtonAction::PRESSED_CW;
+            }
+            if (onCW) onCW();
+            return REWithButtonAction::CW;
+        }
+        if (pressedP) {
+            if (onPressedCCW) onPressedCCW();
+            return REWithButtonAction::PRESSED_CCW;
+        }
+        if (onCCW) onCCW();
+        return REWithButtonAction::CCW;
     }
 
     bool pendingDebounceTimeout() {

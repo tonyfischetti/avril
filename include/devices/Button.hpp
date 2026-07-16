@@ -73,6 +73,17 @@ class Button {
     void setOnPress(Callback fnptr)     {     onPress = fnptr; }
     void setOnLongPress(Callback fnptr) { onLongPress = fnptr; }
 
+    // arm the release suppression from outside: the composite calls this
+    // when rotation happens while pressed, so the release that ends the
+    // chord doesn't also fire onRelease. The flag must live HERE, and
+    // only here -- when the composite kept its own copy, a chord held
+    // past the long-press threshold armed both flags, one physical
+    // release cleared only this one, and the composite's stale copy ate
+    // the release of the *next* ordinary press
+    void suppressNextReleaseEvent() {
+        suppressNextRelease = true;
+    }
+
     bool getStableState() {
         return debouncer.getStableState();
     }
@@ -95,7 +106,13 @@ class Button {
                         return ButtonAction::NONE;
                     }
                     lastPressed = now; // HERE?!
-                    suppressNextRelease = true;
+                    // the template param only governs whether a
+                    // long-press arms the suppression; clearing (below)
+                    // is unconditional so externally armed suppression
+                    // (suppressNextReleaseEvent) works regardless
+                    if constexpr (supressReleaseAfterLongPress) {
+                        suppressNextRelease = true;
+                    }
                     longPressLockoutP = true;
                     if (onLongPress) onLongPress();
                     return ButtonAction::LONG_PRESS;
@@ -111,7 +128,7 @@ class Button {
                 btnAction = ButtonAction::PRESS;
             } else {
                 longPressLockoutP = false;
-                if (supressReleaseAfterLongPress && suppressNextRelease) {
+                if (suppressNextRelease) {
                     suppressNextRelease = false;
                 } else {
                     if (onRelease) onRelease();
@@ -122,7 +139,7 @@ class Button {
         } else if (btnTransition == Transition::RISING) {
             if (passiveState) {
                 longPressLockoutP = false;
-                if (supressReleaseAfterLongPress && suppressNextRelease) {
+                if (suppressNextRelease) {
                     suppressNextRelease = false;
                 } else {
                     if (onRelease) onRelease();
