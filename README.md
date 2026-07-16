@@ -18,7 +18,7 @@ ATMega328P.
   - [`gpio.hpp` — pin abstraction](#gpiohpp--pin-abstraction)
   - [`ticker.hpp` — 1 kHz millisecond timebase](#tickerhpp--1-khz-millisecond-timebase)
   - [`sleep.hpp` — sleep-mode helper](#sleephpp--sleep-mode-helper)
-  - [`watchdog.hpp` — watchdog as dead-man's switch](#watchdoghpp--watchdog-as-dead-mans-switch)
+  - [`watchdog.hpp` — timed wake-ups from power-down](#watchdoghpp--timed-wake-ups-from-power-down)
   - [`uart.hpp` — debug serial (ATmega328P only)](#uarthpp--debug-serial-atmega328p-only)
 - [Utils](#utils)
   - [`IntTransitionDebouncer` — interrupt-driven debouncing](#inttransitiondebouncer--interrupt-driven-debouncing)
@@ -290,31 +290,73 @@ interrupts disabled** — see the canonical loop below. For `SLEEP_MODE_IDLE`
 with the Ticker running, no gate is needed at all: the next tick wakes you
 within a millisecond regardless.
 
-### `watchdog.hpp` — watchdog as dead-man's switch
+### `watchdog.hpp` — timed wake-ups from power-down
 
-A thin, heavily-commented wrapper (the register documentation in the header
-is half the value of the module). The timeout is a compile-time power of two
-of 128 kHz cycles, from 2^11 (16 ms) to 2^20 (8.2 s):
+The watchdog timer runs off its own on-chip 128 kHz oscillator, which
+makes it **the only timer on the chip that keeps running in
+`SLEEP_MODE_PWR_DOWN`**. That is what this module exploits: a wake-up
+source from deep sleep, at a few microamps, in nominal periods of
+16 ms – 8.2 s. (The classic dead-man's-switch reset mode is a possible
+future addition; the register documentation in the header covers it.)
 
 ```cpp
-using WDT = HAL::Watchdog::Watchdog<18>;   // 2^18 cycles ~= 2.04 s
+EMPTY_INTERRUPT(WDT_vect)   // REQUIRED -- see below
 
-WDT::reset();     // (re)arm in *interrupt* mode: WDIE set
-WDT::disable();   // timed-sequence disable
-
-ISR(WDT_vect) {
-    // you own what happens on timeout
-}
+// sleep ~1 minute in 8 s chunks; a pin-change wake cuts it short
+using namespace HAL::Watchdog;
+uint16_t completed { sleepFor<Timeout::MS8192>(7) };
+if (completed == 7) { /* the full time elapsed: nobody touched anything */ }
+else                { /* a foreign interrupt woke us early */ }
 ```
 
-`reset()` arms the watchdog in **interrupt mode** (WDIE), not reset mode, so
-you must provide `ISR(WDT_vect)`; per the datasheet, WDIE must be re-set
-after each interrupt or the *next* timeout hard-resets the chip — which
-makes the default behavior a one-warning-then-reboot dead-man's switch,
-useful in itself. Both `reset()` and `disable()` perform the required timed
-sequences (WDCE/WDE) with interrupts disabled, and both clear WDRF first,
-because a set WDRF forcibly re-enables WDE and would make the disable
-silently fail.
+The pieces, individually:
+
+- **`sleepOnePeriod<Timeout>()`** — one watchdog period of `PWR_DOWN`.
+  It arms interrupt mode (WDIE), pauses the Ticker, sleeps, and on wake
+  answers the question "who woke me?" by reading WDIE back: hardware
+  clears WDIE when the WDT vector executes, so a still-set bit means a
+  *foreign* interrupt (a pin change, say) woke the chip mid-period. On a
+  watchdog wake the Ticker is credited the nominal period; on a foreign
+  wake the waking ISR's own `Ticker::resume()` already handled it
+  (`resume()` on a running ticker is a no-op, so the two never
+  double-credit).
+- **`sleepFor<Timeout>(n)`** — chains `n` periods and stops early on a
+  foreign wake, returning the number of *completed* periods so the
+  caller can tell "the timer ran out" (`== n`) from "someone touched
+  something" (`< n`). This is the building block for idle auto-off:
+  sleep in 8 s chunks, and only act when the full count completes.
+- **`resetCause()`** — why did the chip last reset? `POWER_ON`,
+  `EXTERNAL`, `BROWNOUT`, or `WATCHDOG`, decoded from a snapshot of
+  MCUSR taken before `main()` (see below). A firmware that flashes an
+  error color when it finds itself watchdog-rebooted is a firmware whose
+  bugs announce themselves.
+- **`enableInterrupt<Timeout>()` / `disable()`** — the raw arm/disarm,
+  with the WDCE/WDE timed sequences done correctly and `SREG` restored
+  rather than blindly re-enabling interrupts.
+
+**You must define `ISR(WDT_vect)`** (the app owns ISRs, as always —
+`EMPTY_INTERRUPT(WDT_vect)` suffices for pure wake-ups). Without one,
+avr-libc's `__bad_interrupt` jumps to the reset vector, and every
+watchdog wake-up becomes a silent reboot — a genuinely confusing way to
+fail.
+
+**The `.init3` foundation** (`src/watchdog.cpp` — linked automatically
+if your Makefile globs `src/*.cpp` per the setup section): after a
+watchdog reset, WDRF is set in MCUSR, and while WDRF is set the hardware
+**forces WDE on** with the prescaler reset to its shortest timeout —
+the dog is already running again, at 16 ms, before `main()` begins, and
+any slower startup resets forever. So a `naked` function in section
+`.init3` (after the stack exists, before static initialization) snapshots
+MCUSR into a `.noinit` variable, clears it, and disables the watchdog.
+This is avr-libc's canonical pattern, and the snapshot is what
+`resetCause()` reports.
+
+Accuracy caveat, worth repeating from the header: the 128 kHz oscillator
+is an RC circuit — expect ±10%, drifting with voltage and temperature.
+`Timeout::MS8192` means "about eight seconds," which is exactly right
+for "auto-off after ten minutes" and exactly wrong for timekeeping. The
+Ticker credit keeps `getNumTicks()` *roughly* monotonic across sleeps,
+not accurate.
 
 ### `uart.hpp` — debug serial (ATmega328P only)
 
