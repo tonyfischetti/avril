@@ -20,10 +20,9 @@
  * channels, so sampling it a main-loop-latency later reads the wrong
  * phase at fast rotation and reverses the step.
  *
- * The `debounceWaitTime` and `passiveState` template parameters are
- * vestigial (kept so existing instantiations keep compiling): a Gray-code
- * table decode needs no debouncing -- contact bounce retraces adjacent
- * states and sums to zero -- and has no notion of a passive level.
+ * Note there is no debounce parameter: a Gray-code table decode needs
+ * no debouncing -- contact bounce retraces adjacent states and sums to
+ * zero -- and quadrature has no notion of a passive level either.
  */
 
 namespace HAL {
@@ -34,8 +33,6 @@ namespace Devices {
 
 template<uint8_t clkPin,
          uint8_t dtPin,
-         uint32_t debounceWaitTime,  // vestigial: ignored (see above)
-         bool passiveState,          // vestigial: ignored (see above)
          bool usePullupP,
          bool reverseP=false,
          uint8_t stepsPerDetent=4>   // quarter-steps per detent; KY-040

@@ -601,8 +601,6 @@ Quadrature decoding for detented mechanical encoders (KY-040 style):
 ```cpp
 HAL::Devices::RotaryEncoder<7,      // CLK pin
                             2,      // DT pin
-                            0,      // vestigial (was: debounce window)
-                            HIGH,   // vestigial (was: passive state)
                             true>   // pullups
     re;                             // + reverseP and stepsPerDetent
                                     //   template params, defaulted
@@ -637,9 +635,9 @@ flipped it back. The table decoder is immune to both by construction:
   table maps to 0 — one quarter-step lost, never a reversed one;
 - **contact bounce needs no debouncing at all**: a bounce retraces
   adjacent table transitions (+1 then −1) and cancels arithmetically in
-  the accumulator before anything reaches a callback. This is why the
-  `debounceWaitTime` and `passiveState` parameters are vestigial — they
-  are kept only so existing instantiations keep compiling;
+  the accumulator before anything reaches a callback. This is why there
+  is no debounce-window parameter (and no passive-state one either —
+  quadrature has no passive level);
 - direction reversals mid-cycle likewise cancel; only completed detents
   ever surface.
 
@@ -662,7 +660,7 @@ encoder invites:
 ```cpp
 HAL::Devices::RotaryEncoderWithButton<
     3, 30, 1000, HIGH, true,     // button:  pin, debounce, long-press, passive, pullup
-    7, 2, 0, HIGH, true          // encoder: clk, dt, (vestigial ×2), pullup
+    7, 2, true                   // encoder: clk, dt, pullup
 > knob;
 
 knob.begin();

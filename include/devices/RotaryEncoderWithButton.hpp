@@ -28,8 +28,6 @@ template<uint8_t btnPin,
          bool     btnUsePullup,
          uint8_t  reClkPin,
          uint8_t  reDtPin,
-         uint32_t reDebounceWaitTime,
-         bool     rePassiveState,
          bool     reUsePullup,
          bool     btnSuppressReleaseAfterLongPress=true,
          bool     btnAllowConsecutiveLongPresses=false,
@@ -46,8 +44,6 @@ class RotaryEncoderWithButton {
 
     HAL::Devices::RotaryEncoder<reClkPin,
                                 reDtPin,
-                                reDebounceWaitTime,
-                                rePassiveState,
                                 reUsePullup,
                                 reReverseP> re;
 
