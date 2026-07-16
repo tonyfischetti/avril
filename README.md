@@ -363,12 +363,18 @@ not accurate.
 Blocking, transmit-oriented, deliberately primitive — it exists so a 328P
 project can print numbers at a human during bring-up, not to be a serial
 framework. Compiles to nothing on the ATtiny84 and ATtiny85 (no USART).
+Blocking is a *feature* at this altitude: no ISR, no buffer, no message
+lost when the chip resets two instructions later, and a known bounded
+cost (~87 µs per byte at 115200).
 
 ```cpp
-HAL::UART::init<115200>();        // baud is a template parameter
-HAL::UART::println("booted");     // println appends \r\n
-HAL::UART::print("ticks: ");
-HAL::UART::println(someUint32);   // snprintf-backed; pulls in stdio, ~1-2 KB
+HAL::UART::init<115200>();            // baud is a template parameter
+HAL::UART::println_P(PSTR("booted")); // string lives in flash ONLY
+HAL::UART::print("ticks: ");          // this one costs flash AND RAM
+HAL::UART::println(someUint32);       // ~40 bytes of code, no snprintf
+HAL::UART::println(-42);              // signed overloads do the right thing
+HAL::UART::printlnHex(PINB);          // fixed-width uppercase hex: "2C"
+HAL::UART::flush();                   // REQUIRED before sleeping/rebooting
 ```
 
 The baud divisor is computed at compile time with proper rounding, and
@@ -380,8 +386,35 @@ achieved within 2.5%, or that overflows the 12-bit UBRR register, is a
 millisecond: a baud rate that's silently wrong is worse than one that
 doesn't build.
 
-Mind that `print(uint32_t)` drags `snprintf` into flash; on a tight build,
-that's the first thing to go.
+Things worth knowing:
+
+- **Use `print_P`/`println_P` with `PSTR()` for string literals.** A plain
+  `print("...")` literal lands in `.data` — flash *and* a RAM shadow copied
+  at startup. On a 2 KB-RAM part, debug strings are the classic silent RAM
+  eater; `print_P(PSTR("..."))` keeps them in flash only.
+- **Integer printing is hand-rolled** (digits peeled into a stack buffer),
+  not `snprintf`-backed: the old `%lu` call dragged ~1.4 KB of avr-libc's
+  formatted-print machinery into any build that printed a number. The full
+  overload set — `uint32_t`/`int32_t`/`uint16_t`/`int16_t` — exists so
+  plain `int` arguments (`int` == `int16_t` on AVR) resolve unambiguously;
+  8-bit values promote to the `int16_t` overload and print numerically.
+  `printByte()` sends a raw character.
+- **`printHex` / `printlnHex`** (8/16/32-bit) print fixed-width uppercase
+  hex with no prefix — two digits per byte, so a register dump reads like
+  the datasheet.
+- **Call `flush()` before sleeping.** `printByte` waits for the *buffer*
+  (UDRE0), not the *shift register* (TXC0), so the final frame is still on
+  the wire when the last `print` returns; a `goToSleep` (or watchdog
+  reboot) right behind it mangles the last character mid-frame. `flush()`
+  blocks until the transmitter is truly idle — `printByte` clears the
+  sticky TXC0 flag as each byte is queued so `flush()` measures *this*
+  transmission, and a one-byte "anything sent yet?" flag keeps a
+  pre-first-print `flush()` from spinning forever on a flag that never
+  latches.
+
+Still deliberately absent: interrupt-driven (buffered) transmit — blocking
+is the point — and any receive API, though the receiver hardware is
+enabled (`RXEN0`) awaiting one.
 
 ## Utils
 

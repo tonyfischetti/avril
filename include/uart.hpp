@@ -2,11 +2,9 @@
 
 #include "common.hpp"
 
-#include <stdio.h>
+#include <stdint.h>
 #include <avr/io.h>
-#include <avr/sleep.h>
-#include <avr/interrupt.h>
-
+#include <avr/pgmspace.h>
 
 /**
  * Blocking, transmit-oriented debug UART (ATmega328P only; the ATtiny84
@@ -18,6 +16,19 @@
  * truncated normal-mode divisor is off by +8.5%, the rounded U2X one by
  * -2.1%). Rates that cannot be achieved within 2.5% -- or that need more
  * than UBRR's 12 bits -- fail the build.
+ *
+ * Blocking is a feature here: no ISR, no buffer, no lost messages when
+ * the chip resets two instructions later. The costs are known and
+ * bounded (one byte is ~87 us at 115200). Two things to know:
+ *
+ *   - String literals passed to print() live in .data: flash AND RAM,
+ *     copied at startup. On a 2 KB-RAM part, debug strings are the
+ *     classic silent RAM eater. Use print_P(PSTR("...")) to keep them
+ *     in flash only.
+ *   - printByte() waits for the *buffer* (UDRE0), not the *shift
+ *     register* (TXC0), so the final frame is still on the wire when
+ *     the last print() returns. Call flush() before sleeping or
+ *     resetting, or the last character arrives mangled.
  */
 
 namespace HAL {
@@ -55,6 +66,16 @@ constexpr BaudConfig selectBaudConfig() {
     return { static_cast<uint16_t>(divU - 1), true, actU };
 }
 
+// flush() must not wait on TXC0 if nothing was ever transmitted -- the
+// flag only latches after a first completed frame, so a pre-first-print
+// flush() would spin forever. One byte of state buys away the deadlock
+inline bool anythingSentP { false };
+
+constexpr uint8_t hexDigit(uint8_t nibble) {
+    return static_cast<uint8_t>(nibble < 10 ? '0' + nibble
+                                            : 'A' + (nibble - 10));
+}
+
 }
 
 template<uint32_t BaudRate>
@@ -83,39 +104,119 @@ inline void init() {
     UCSR0B = (1<<RXEN0) | (1<<TXEN0);
 }
 
-inline void printByte(uint8_t data) {
+// noinline (here and below): `inline` is for linkage, not a request to
+// inline -- a busy-wait body called from a dozen places should exist
+// once. It also keeps -Winline quiet now that GCC's cost model declines
+// to inline these at their call-site count
+__attribute__((noinline)) inline void printByte(uint8_t data) {
     // Wait for empty transmit buffer
     while (!(UCSR0A & (1<<UDRE0))) {}
+
+    // clear the sticky TXC0 (write-one-to-clear) as the byte is queued,
+    // so flush() measures THIS transmission, not a long-finished one.
+    // Keep only the R/W bits (U2X0, MPCM0); the datasheet wants the RX
+    // status flags written as zero
+    UCSR0A = static_cast<uint8_t>(
+        (UCSR0A & ((1 << U2X0) | (1 << MPCM0))) | (1 << TXC0));
+    detail::anythingSentP = true;
 
     // Put data into buffer, sends the data
     UDR0 = data;
 }
 
-// `inline` here is for linkage (header definition), not a request to
-// inline: a byte-at-a-time busy-wait loop should exist once and be
-// called. noinline documents that intent and keeps -Winline quiet once
-// there are enough call sites that GCC stops inlining it anyway
+// block until the shift register has pushed the final frame onto the
+// wire. printByte() only waits for the buffer, so without this a
+// goToSleep() (or a watchdog reboot) right after a print mangles the
+// last character mid-frame
+inline void flush() {
+    if (!detail::anythingSentP) return;  // TXC0 never latches otherwise
+    while (!(UCSR0A & (1 << TXC0))) {}
+}
+
 __attribute__((noinline)) inline void print(const char* str) {
     while (*str) {
         printByte(static_cast<uint8_t>(*str++));
     }
 }
 
-inline void print(uint32_t n) {
-    char buf[11];   // 4294967295 is 10 digits; snprintf NUL-terminates
-    snprintf(buf, sizeof(buf), "%lu", n);
-    print(buf);
+// PROGMEM variant: `flashStr` must point into flash -- wrap literals in
+// PSTR(), e.g. print_P(PSTR("booted")). Unlike print("booted"), the
+// string then costs flash only, not a startup-copied RAM shadow
+__attribute__((noinline)) inline void print_P(const char* flashStr) {
+    uint8_t c;
+    while ((c = pgm_read_byte(flashStr++)) != 0) {
+        printByte(c);
+    }
 }
 
-inline void println(const char* str) {
-    print(str);
-    print("\r\n");
+// digits are peeled off least-significant-first into the back of a
+// small stack buffer. ~40 bytes of code; the snprintf("%lu") this
+// replaced dragged avr-libc's formatted-print machinery (~1.4 KB of
+// flash) into every build that printed a number
+__attribute__((noinline)) inline void print(uint32_t n) {
+    char buf[11];             // 4294967295 is 10 digits + NUL
+    char* p { buf + 10 };
+    *p = '\0';
+    do {
+        *--p = static_cast<char>('0' + static_cast<uint8_t>(n % 10));
+        n /= 10;
+    } while (n != 0);
+    print(p);
 }
 
-inline void println(uint32_t n) {
-    print(n);
-    print("\r\n");
+inline void print(int32_t n) {
+    if (n < 0) {
+        printByte(static_cast<uint8_t>('-'));
+        // negate in unsigned space: -INT32_MIN overflows int32_t, but
+        // 0 - 0x80000000u is 2147483648, exactly the digits we want
+        print(0U - static_cast<uint32_t>(n));
+    } else {
+        print(static_cast<uint32_t>(n));
+    }
 }
+
+// exact-match overloads for the 16-bit types so that plain `int`
+// arguments (int == int16_t on AVR) resolve without ambiguity between
+// the 32-bit signed and unsigned printers. uint8_t/int8_t arguments
+// promote to int and land on the int16_t overload, printing their
+// numeric value; use printByte() to send a raw character instead
+inline void print(uint16_t n) { print(static_cast<uint32_t>(n)); }
+inline void print(int16_t n)  { print(static_cast<int32_t>(n));  }
+
+// fixed-width uppercase hex, no prefix: two digits per byte, so
+// printHex(PINB) reads like the datasheet. Widths compose: the 16- and
+// 32-bit versions print 4 and 8 digits
+__attribute__((noinline)) inline void printHex(uint8_t n) {
+    printByte(detail::hexDigit(static_cast<uint8_t>(n >> 4)));
+    printByte(detail::hexDigit(static_cast<uint8_t>(n & 0x0F)));
+}
+
+inline void printHex(uint16_t n) {
+    printHex(static_cast<uint8_t>(n >> 8));
+    printHex(static_cast<uint8_t>(n));
+}
+
+inline void printHex(uint32_t n) {
+    printHex(static_cast<uint16_t>(n >> 16));
+    printHex(static_cast<uint16_t>(n));
+}
+
+namespace detail {
+__attribute__((noinline)) inline void newline() {
+    printByte(static_cast<uint8_t>('\r'));
+    printByte(static_cast<uint8_t>('\n'));
+}
+}
+
+inline void println(const char* str) { print(str); detail::newline(); }
+inline void println_P(const char* s) { print_P(s); detail::newline(); }
+inline void println(uint32_t n)      { print(n);   detail::newline(); }
+inline void println(int32_t n)       { print(n);   detail::newline(); }
+inline void println(uint16_t n)      { print(n);   detail::newline(); }
+inline void println(int16_t n)       { print(n);   detail::newline(); }
+inline void printlnHex(uint8_t n)    { printHex(n); detail::newline(); }
+inline void printlnHex(uint16_t n)   { printHex(n); detail::newline(); }
+inline void printlnHex(uint32_t n)   { printHex(n); detail::newline(); }
 
 #endif
 
