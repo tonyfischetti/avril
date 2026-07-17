@@ -1089,6 +1089,13 @@ canonical loop below. Current residents:
   with battery backup, LCD1602 face, rotary-encoder set-time/set-alarm
   UI, long-press to arm, blinking LED wake-up, and the RTC's
   stale-time honesty check on boot. Under 4 KB of flash.
+- **`mp3-player`** (328P): the full jukebox — every `.MP3` in a FAT32
+  card's root, auto-advancing; knob for prev/next, press to pause,
+  pressed-rotate for volume; LCD now-playing with filename, track
+  count, the codec's own decode time, and play/pause glyphs; every
+  bring-up failure named on the display ("no SD card", …). The
+  data-pump architecture from the module docs, running for real, in
+  ~7 KB.
 
 ## Putting it together: the canonical main loop
 

@@ -24,3 +24,4 @@ Current examples:
 | example | MCU | modules exercised |
 |---|---|---|
 | `alarm-clock` | ATmega328P | I²C, DS3231, LCD1602, RotaryEncoderWithButton, Ticker, Sleep, UART |
+| `mp3-player` | ATmega328P | SPI, I²C, UART, SD, FAT32, VS1053, LCD1602, RotaryEncoderWithButton, Ticker, Sleep |
