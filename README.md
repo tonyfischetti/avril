@@ -37,6 +37,7 @@ ATMega328P.
   - [`DS3231::Clock` — wall-clock time and alarms](#ds3231clock--wall-clock-time-and-alarms)
   - [`SD::Card` — raw-block SD storage](#sdcard--raw-block-sd-storage)
   - [`VS1053::Codec` — MP3 (and more) playback](#vs1053codec--mp3-and-more-playback)
+- [Examples](#examples)
 - [Putting it together: the canonical main loop](#putting-it-together-the-canonical-main-loop)
 - [Known limitations](#known-limitations)
 
@@ -1075,6 +1076,19 @@ Design notes:
   overhead — then 32-byte `sendData()` feedings whenever
   `readyForData()`. At 320 kbps that's ~40 KB/s against an SPI budget
   many times larger; the main loop stays responsive throughout.
+
+## Examples
+
+`examples/` holds **complete, buildable appliances** — not snippets.
+Each is one directory with a `main.cpp` (whose header comment is the
+parts list and wiring table) and a `Makefile` that builds against the
+avril tree it lives in. They are the living demonstrations of the
+canonical loop below. Current residents:
+
+- **`alarm-clock`** (328P): a real bedside alarm clock — DS3231 time
+  with battery backup, LCD1602 face, rotary-encoder set-time/set-alarm
+  UI, long-press to arm, blinking LED wake-up, and the RTC's
+  stale-time honesty check on boot. Under 4 KB of flash.
 
 ## Putting it together: the canonical main loop
 
