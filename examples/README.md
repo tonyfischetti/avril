@@ -32,3 +32,4 @@ Current examples:
 | `alarm-clock` | ATmega328P | I²C, DS3231, LCD1602, RotaryEncoderWithButton, Ticker, Sleep, UART |
 | `mp3-player` | ATmega328P | SPI, I²C, UART, SD, FAT32, VS1053, LCD1602, RotaryEncoderWithButton, Ticker, Sleep |
 | `vitals-monitor` | ATtiny84 | Analog (Vcc gauge, on-die temp, LDR), Watchdog (PWR_DOWN cadence), I²C (bit-banged), LCD1602 |
+| `motion-alarm` | ATtiny85 | GPIO (PCINT wake), Sleep (PWR_DOWN), Watchdog (all timing), Analog (raw-battery divider) |

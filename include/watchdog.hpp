@@ -110,7 +110,10 @@ inline void enableInterrupt() {
     SREG = sreg;
 }
 
-inline void disable() {
+// noinline: `inline` is for linkage; a timed-sequence body called
+// from every sleepOnePeriod instantiation should exist once (and
+// -Winline agrees once the call sites accumulate)
+__attribute__((noinline)) inline void disable() {
     uint8_t sreg { SREG };
     cli();
     MCUSR &= static_cast<uint8_t>(~(1 << WDRF));

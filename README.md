@@ -1101,6 +1101,13 @@ canonical loop below. Current residents:
   temperature, and a photoresistor percent on an LCD — waking from
   `PWR_DOWN` every ~2 s via `Watchdog::sleepFor` and never even
   starting the Ticker. 1.8 KB of flash, six bytes of RAM.
+- **`motion-alarm`** (tiny85): a PIR burglar alarm that lives ~10
+  months on a 9 V block — PCINT wake from `PWR_DOWN` (~55 µA armed),
+  watchdog-timed beeps through a MOSFET-switched 9 V buzzer, raw-
+  battery monitoring through a divider, and a header comment that
+  documents the whole circuit *and why each part is there* (gate
+  pulldown, flyback diode, micropower-LDO-not-a-buck, the divider's
+  cap). 1 KB of flash.
 
 ## Putting it together: the canonical main loop
 
