@@ -19,8 +19,9 @@ ATMega328P.
   - [`ticker.hpp` — 1 kHz millisecond timebase](#tickerhpp--1-khz-millisecond-timebase)
   - [`sleep.hpp` — sleep-mode helper](#sleephpp--sleep-mode-helper)
   - [`watchdog.hpp` — timed wake-ups from power-down](#watchdoghpp--timed-wake-ups-from-power-down)
-  - [`spi.hpp` — blocking SPI master](#spihpp--blocking-spi-master)
-  - [`uart.hpp` — debug serial (ATmega328P only)](#uarthpp--debug-serial-atmega328p-only)
+- [Comms](#comms)
+  - [`comms/spi.hpp` — blocking SPI master](#commsspihpp--blocking-spi-master)
+  - [`comms/uart.hpp` — debug serial (ATmega328P only)](#commsuarthpp--debug-serial-atmega328p-only)
 - [Utils](#utils)
   - [`IntTransitionDebouncer` — interrupt-driven debouncing](#inttransitiondebouncer--interrupt-driven-debouncing)
   - [`LFSR` — fast 8-bit pseudorandomness](#lfsr--fast-8-bit-pseudorandomness)
@@ -359,7 +360,24 @@ for "auto-off after ten minutes" and exactly wrong for timekeeping. The
 Ticker credit keeps `getNumTicks()` *roughly* monotonic across sleeps,
 not accurate.
 
-### `spi.hpp` — blocking SPI master
+## Comms
+
+Buses for talking to *other chips*, as distinct from the top-level modules
+(the MCU's own facilities), `devices/` (things wired to pins), and
+`utils/` (software helpers). Everything here lives under `HAL::Comms::`,
+mirroring how `devices/` maps to `HAL::Devices`. Planned residents beyond
+these two: I²C. Note that drivers for chips that *sit on* a bus (an SD
+card, an MCP2515) belong in `devices/`, consuming a comms module — bus
+versus thing-on-the-bus is the boundary.
+
+The extra namespace level costs a few characters at every debug print;
+the idiomatic relief is an alias at the top of an app file:
+
+```cpp
+namespace UART = HAL::Comms::UART;   // then UART::println(...) as before
+```
+
+### `comms/spi.hpp` — blocking SPI master
 
 SPI is barely a protocol — a shift register with a clock — which makes the
 master side the easiest bus there is, and the gateway to SD cards, displays,
@@ -367,8 +385,8 @@ and CAN (via MCP2515). All three MCUs are supported, each through its own
 silicon:
 
 ```cpp
-using Spi = HAL::SPI::Master<400000>;   // ceiling in Hz; optional Mode and
-                                        // BitOrder template params follow
+using Spi = HAL::Comms::SPI::Master<400000>;  // ceiling in Hz; optional Mode
+                                              // and BitOrder params follow
 using CS  = HAL::GPIO::GPIO<16>;        // chip select is YOUR problem
 
 Spi::begin();
@@ -414,7 +432,7 @@ Design notes, in the usual spirit:
   needs an interrupt-driven design that this deliberately isn't. (Contrast
   I²C slave, where clock stretching makes the hardware wait for you.)
 
-### `uart.hpp` — debug serial (ATmega328P only)
+### `comms/uart.hpp` — debug serial (ATmega328P only)
 
 Blocking, transmit-oriented, deliberately primitive — it exists so a 328P
 project can print numbers at a human during bring-up, not to be a serial
@@ -424,13 +442,15 @@ lost when the chip resets two instructions later, and a known bounded
 cost (~87 µs per byte at 115200).
 
 ```cpp
-HAL::UART::init<115200>();            // baud is a template parameter
-HAL::UART::println_P(PSTR("booted")); // string lives in flash ONLY
-HAL::UART::print("ticks: ");          // this one costs flash AND RAM
-HAL::UART::println(someUint32);       // ~40 bytes of code, no snprintf
-HAL::UART::println(-42);              // signed overloads do the right thing
-HAL::UART::printlnHex(PINB);          // fixed-width uppercase hex: "2C"
-HAL::UART::flush();                   // REQUIRED before sleeping/rebooting
+namespace UART = HAL::Comms::UART;
+
+UART::init<115200>();            // baud is a template parameter
+UART::println_P(PSTR("booted")); // string lives in flash ONLY
+UART::print("ticks: ");          // this one costs flash AND RAM
+UART::println(someUint32);       // ~40 bytes of code, no snprintf
+UART::println(-42);              // signed overloads do the right thing
+UART::printlnHex(PINB);          // fixed-width uppercase hex: "2C"
+UART::flush();                   // REQUIRED before sleeping/rebooting
 ```
 
 The baud divisor is computed at compile time with proper rounding, and

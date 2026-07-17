@@ -32,6 +32,7 @@
  */
 
 namespace HAL {
+namespace Comms {
 namespace UART {
 
 // compile only where a USART exists: an allow-list, not a deny-list,
@@ -220,5 +221,6 @@ inline void printlnHex(uint32_t n)   { printHex(n); detail::newline(); }
 
 #endif
 
+}
 }
 }

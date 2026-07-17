@@ -48,6 +48,7 @@
  */
 
 namespace HAL {
+namespace Comms {
 namespace SPI {
 
 enum class Mode : uint8_t { M0, M1, M2, M3 };  // CPOL = bit1, CPHA = bit0
@@ -208,5 +209,6 @@ struct Master {
 
 #endif
 
+}
 }
 }
