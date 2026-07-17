@@ -34,3 +34,4 @@ Current examples:
 | `vitals-monitor` | ATtiny84 | Analog (Vcc gauge, on-die temp, LDR), Watchdog (PWR_DOWN cadence), I²C (bit-banged), LCD1602 |
 | `motion-alarm` | ATtiny85 | GPIO (PCINT wake), Sleep (PWR_DOWN), Watchdog (all timing), Analog (raw-battery divider) |
 | `ir-probe` | ATmega328P | IRReceiverNEC (timestamp-first ISR), LCD1602, UART, Ticker, Sleep |
+| `weather-logger` | ATmega328P | Scheduler (tick-less loop), FAT32 (`contiguousBlockRange`), SD (raw writes), DS3231, LCD1602, Analog, Watchdog, UART |

@@ -29,6 +29,7 @@ ATMega328P.
 - [Utils](#utils)
   - [`IntTransitionDebouncer` — interrupt-driven debouncing](#inttransitiondebouncer--interrupt-driven-debouncing)
   - [`LFSR` — fast 8-bit pseudorandomness](#lfsr--fast-8-bit-pseudorandomness)
+  - [`Scheduler` — tick-less cooperative task table](#scheduler--tick-less-cooperative-task-table)
 - [Devices](#devices)
   - [`Button`](#button)
   - [`RotaryEncoder`](#rotaryencoder)
@@ -672,6 +673,14 @@ Design notes:
   philosophy as the layers below it.
 - **FAT32 only**: cards ≤ 2 GB often ship FAT16, which this deliberately
   doesn't speak — reformat them; SDHC cards come FAT32 out of the box.
+- **The write path for a read-only FAT**: `contiguousBlockRange()`
+  verifies that a file (preallocated by a computer) occupies one
+  contiguous run of blocks and returns that range — which raw
+  `SD::writeBlock()` calls can then fill. File *contents* change,
+  filesystem *metadata* doesn't, and the card stays mountable. A
+  fresh-formatted card's first file is always contiguous;
+  `Result::FRAGMENTED` means copy it to a fresh card.
+  `examples/weather-logger` is the demonstration.
 
 ## Utils
 
@@ -747,6 +756,38 @@ byte. Callers wanting less obvious short-period artifacts can re-seed
 periodically (see lamp-box's CandlePattern, which increments its seed every
 frame — a "jumping" trick that breaks up the 255-frame cycle for pleasingly
 non-repeating flicker).
+
+### `Scheduler` — tick-less cooperative task table
+
+The superloop's `if (now - last >= period)` idiom, tabled — with the
+addition that makes it worth having: **`run()` returns the milliseconds
+until the next deadline**, so the loop bottom sleeps exactly that long
+instead of spinning at the ticker's 1 kHz. Long gaps become `PWR_DOWN`
+naps (`Watchdog::sleepFor` pauses the ticker and credits the nap back,
+so the timeline sails through); short ones, `IDLE`:
+
+```cpp
+HAL::Utils::Scheduler<4> sched;
+sched.add(&sampleTask,  2000);
+sched.add(&displayTask, 1000);
+sched.add(&logTask,    60000);
+sched.add(&blinkTask,    500);
+
+while (1) {
+    uint32_t wait { sched.run() };   // runs whatever is due
+    if (wait >= 300) HAL::Watchdog::sleepFor<Timeout::MS256>(1);
+    else             HAL::Sleep::goToSleep(SLEEP_MODE_IDLE);
+}
+```
+
+Semantics are stated in the header so they're decisions, not surprises:
+periods restart when a task *runs* (no catch-up bursts — "roughly this
+often," wrong for counting); tasks run cooperatively in `add()` order
+(keep them short); timing rides on `getNumTicks()` and is only as
+accurate as what feeds it — watchdog-napped time is nominal ±10%, which
+is exactly why a logger should timestamp records from an RTC, not from
+the scheduler. At one or two cadences, skip this and use the idiom; it
+earns its keep at three-plus (see `examples/weather-logger`).
 
 ## Devices
 
@@ -1168,6 +1209,14 @@ canonical loop below. Current residents:
   with one `.` per ~110 ms repeat frame so the hold cadence draws
   itself on the terminal. Building a command table for a remote is:
   mash every button, save the log. Silence diagnoses "not NEC".
+- **`weather-logger`** (328P): the tick-less scheduler's demo and the
+  read-only-FAT write trick in one — four independent cadences (sample
+  2 s, display 1 s, log 60 s, heartbeat 500 ms) in one task table, the
+  loop sleeping *exactly* as long as the schedule allows (`PWR_DOWN`
+  naps credited back to the timeline), and DS3231-timestamped records
+  written raw into a computer-preallocated `LOG.CSV` that still opens
+  in any editor. Approximate scheduling, exact data. Power-loss resume
+  by binary-searching for the first blank block.
 
 ## Putting it together: the canonical main loop
 

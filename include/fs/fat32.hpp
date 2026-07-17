@@ -45,7 +45,9 @@ enum class Result : uint8_t {
     UNSUPPORTED,      // not FAT32 (FAT12/16 card?), or sector size != 512
     IO_ERROR,         // the block device reported an error
     NOT_FOUND,        // find() missed / directory iteration ended
-    BAD_PARAMS        // e.g. seek past end of file
+    BAD_PARAMS,       // e.g. seek past end of file
+    FRAGMENTED        // contiguousBlockRange(): the file's clusters
+                      // are not one run (copy it to a fresh card)
 };
 
 template<typename BlockDev>   // an instantiation of HAL::Devices::SD::Card
@@ -299,6 +301,36 @@ struct FAT32 {
                 f.cluster = nxt;
             }
         }
+        return Result::OK;
+    }
+
+    // THE WRITE PATH FOR A READ-ONLY FAT: a file PREALLOCATED by a
+    // computer occupies a fixed set of blocks. If its cluster chain
+    // is contiguous -- and a fresh-formatted card's first file always
+    // is -- those blocks form one range that raw SD::writeBlock()
+    // calls can fill: file CONTENTS change, filesystem METADATA
+    // doesn't, and the card stays mountable on the computer. This
+    // verifies contiguity (walking the whole chain) and returns the
+    // range; FRAGMENTED means copy the file onto a freshly formatted
+    // card instead
+    static Result contiguousBlockRange(const FileInfo& info,
+                                       uint32_t& firstBlock,
+                                       uint32_t& blockCount) {
+        if (!mountedP) return Result::NOT_MOUNTED;
+        if (info.firstCluster < 2) return Result::BAD_PARAMS;
+        uint32_t c        { info.firstCluster };
+        uint32_t clusters { 1 };
+        for (;;) {
+            uint32_t nxt;
+            Result r { nextCluster(c, nxt) };
+            if (r != Result::OK) return r;
+            if (nxt >= CHAIN_END) break;
+            if (nxt != c + 1) return Result::FRAGMENTED;
+            c = nxt;
+            ++clusters;
+        }
+        firstBlock = clusterToBlock(info.firstCluster);
+        blockCount = clusters << spcLog2;
         return Result::OK;
     }
 
