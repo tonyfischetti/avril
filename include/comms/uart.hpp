@@ -192,12 +192,12 @@ __attribute__((noinline)) inline void printHex(uint8_t n) {
     printByte(detail::hexDigit(static_cast<uint8_t>(n & 0x0F)));
 }
 
-inline void printHex(uint16_t n) {
+__attribute__((noinline)) inline void printHex(uint16_t n) {
     printHex(static_cast<uint8_t>(n >> 8));
     printHex(static_cast<uint8_t>(n));
 }
 
-inline void printHex(uint32_t n) {
+__attribute__((noinline)) inline void printHex(uint32_t n) {
     printHex(static_cast<uint16_t>(n >> 16));
     printHex(static_cast<uint16_t>(n));
 }

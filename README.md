@@ -33,6 +33,7 @@ ATMega328P.
   - [`RotaryEncoder`](#rotaryencoder)
   - [`RotaryEncoderWithButton`](#rotaryencoderwithbutton)
   - [`SD::Card` — raw-block SD storage](#sdcard--raw-block-sd-storage)
+  - [`VS1053::Codec` — MP3 (and more) playback](#vs1053codec--mp3-and-more-playback)
 - [Putting it together: the canonical main loop](#putting-it-together-the-canonical-main-loop)
 - [Known limitations](#known-limitations)
 
@@ -887,6 +888,55 @@ Design notes:
   bring up with a name-brand card.
 - **Not implemented, deliberately**: multi-block transfers (CMD18/25)
   and MMC-era cards.
+
+### `VS1053::Codec` — MP3 (and more) playback
+
+No AVR can decode MP3 — that takes ~20+ MIPS of DSP and tens of KB of
+RAM — so the VS1053b does it in silicon, and the AVR's job collapses to
+**data pump**: read file bytes, shove them at the codec whenever its
+DREQ pin says "feed me". The codec has its own FIFO, so nothing here is
+real-time.
+
+```cpp
+#include "devices/VS1053.hpp"
+using Mp3 = HAL::Devices::VS1053::Codec<24, 25, 26, 6>;
+//                       XCS, XDCS, DREQ, XRESET  (+ optional fastHz)
+
+Mp3::begin();                    // reset pulse, chip-version check, clock up
+Mp3::sineTestStart();            // BRING-UP: a tone with no card, no file
+Mp3::setVolume(0x20, 0x20);      // attenuation, 0.5 dB steps per channel
+
+// the pump (see the smoke test for the full loop):
+if (Mp3::readyForData()) Mp3::sendData(buf, 32);
+Mp3::stopTrack();                // clean end-of-track; next song needs no reset
+```
+
+Design notes:
+
+- **Two chip selects, one bus**: XCS gates SCI (the 16-bit control
+  registers), XDCS gates SDI (the raw byte stream). Both ride the shared
+  SPI bus alongside the SD card — and since neighbors leave their own
+  speeds configured, every public operation re-asserts its own SPI
+  config first (two register writes of insurance).
+- **Two speeds, same story as SD**: after reset the codec runs straight
+  off its 12.288 MHz crystal (SCI tops out ~1.75 MHz), so `begin()`
+  starts slow, multiplies the internal clock to 3.0× via `SCI_CLOCKF`,
+  then shifts to `fastHz` (default 4 MHz).
+- **`begin()` verifies the chip** (SS_VER == 4 in `SCI_STATUS`, i.e. a
+  real VS1053) and every DREQ wait is bounded — dead chip, `Result`,
+  no hang.
+- **`sineTestStart()` before anything else on new hardware**: it proves
+  XCS/XDCS/DREQ and the bus with zero moving parts. If the sine plays,
+  every later bug is in software.
+- **`stopTrack()`** does the datasheet's clean ending (2052 end-fill
+  bytes, `SM_CANCEL`, fill until acknowledged) so the next track starts
+  without a reset. `decodeTime()` and `hdat1()` give a UI seconds-played
+  and format confirmation (`0xFFEx` = MP3 decoding right now).
+- **The pump pattern** (proven in the 328P smoke test): `Fat::read()`
+  512-byte chunks into a RAM buffer — block-aligned, so zero wire
+  overhead — then 32-byte `sendData()` feedings whenever
+  `readyForData()`. At 320 kbps that's ~40 KB/s against an SPI budget
+  many times larger; the main loop stays responsive throughout.
 
 ## Putting it together: the canonical main loop
 
