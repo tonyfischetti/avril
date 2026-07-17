@@ -6,6 +6,8 @@
 #include <avr/io.h>
 #include <avr/pgmspace.h>
 
+#include "../utils/format.hpp"
+
 /**
  * Blocking debug UART (ATmega328P only; the ATtiny84 and ATtiny85 have
  * no USART). Transmit-oriented, with polled receive.
@@ -92,11 +94,6 @@ constexpr BaudConfig selectBaudConfig() {
 // flag only latches after a first completed frame, so a pre-first-print
 // flush() would spin forever. One byte of state buys away the deadlock
 inline bool anythingSentP { false };
-
-constexpr uint8_t hexDigit(uint8_t nibble) {
-    return static_cast<uint8_t>(nibble < 10 ? '0' + nibble
-                                            : 'A' + (nibble - 10));
-}
 
 }
 
@@ -195,30 +192,17 @@ __attribute__((noinline)) inline void print_P(const char* flashStr) {
     }
 }
 
-// digits are peeled off least-significant-first into the back of a
-// small stack buffer. ~40 bytes of code; the snprintf("%lu") this
-// replaced dragged avr-libc's formatted-print machinery (~1.4 KB of
-// flash) into every build that printed a number
+// formatting itself lives in utils/format.hpp (host-tested against
+// snprintf); these are just the format-then-print pairings. Still no
+// avr-libc snprintf anywhere near flash
 __attribute__((noinline)) inline void print(uint32_t n) {
-    char buf[11];             // 4294967295 is 10 digits + NUL
-    char* p { buf + 10 };
-    *p = '\0';
-    do {
-        *--p = static_cast<char>('0' + static_cast<uint8_t>(n % 10));
-        n /= 10;
-    } while (n != 0);
-    print(p);
+    char buf[11];
+    print(HAL::Utils::Fmt::u32(buf, n));
 }
 
 __attribute__((noinline)) inline void print(int32_t n) {
-    if (n < 0) {
-        printByte(static_cast<uint8_t>('-'));
-        // negate in unsigned space: -INT32_MIN overflows int32_t, but
-        // 0 - 0x80000000u is 2147483648, exactly the digits we want
-        print(0U - static_cast<uint32_t>(n));
-    } else {
-        print(static_cast<uint32_t>(n));
-    }
+    char buf[12];
+    print(HAL::Utils::Fmt::s32(buf, n));
 }
 
 // exact-match overloads for the 16-bit types so that plain `int`
@@ -237,8 +221,11 @@ __attribute__((noinline)) inline void print(int16_t n) {
 // printHex(PINB) reads like the datasheet. Widths compose: the 16- and
 // 32-bit versions print 4 and 8 digits
 __attribute__((noinline)) inline void printHex(uint8_t n) {
-    printByte(detail::hexDigit(static_cast<uint8_t>(n >> 4)));
-    printByte(detail::hexDigit(static_cast<uint8_t>(n & 0x0F)));
+    using HAL::Utils::Fmt::hexDigit;
+    printByte(static_cast<uint8_t>(hexDigit(
+        static_cast<uint8_t>(n >> 4))));
+    printByte(static_cast<uint8_t>(hexDigit(
+        static_cast<uint8_t>(n & 0x0F))));
 }
 
 __attribute__((noinline)) inline void printHex(uint16_t n) {

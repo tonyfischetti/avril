@@ -2,7 +2,12 @@ MCU      := attiny85
 F_CPU    := 8000000UL
 HAL_LOC  := ../..
 
-SRC      := main.cpp
+# two sensor variants, one circuit: pir.cpp (room alarm, ~58 uA) or
+# sw18015p.cpp (bike/tamper alarm, ~8 uA). Build the other with
+#   make VARIANT=sw18015p
+VARIANT  ?= pir
+
+SRC      := $(VARIANT).cpp
 SRC      += $(wildcard $(HAL_LOC)/src/*.cpp)
 SRC      += $(wildcard $(HAL_LOC)/src/utils/*.cpp)
 SRC      += $(wildcard $(HAL_LOC)/src/utils/*.S)
@@ -23,20 +28,20 @@ CXXFLAGS := -mmcu=$(MCU) -DF_CPU=$(F_CPU) \
             -Wsuggest-override -Wvirtual-move-assign -Wuninitialized \
             -Wl,--gc-sections
 
-all: build/main.hex
+all: build/$(VARIANT).hex
 
 build:
 	mkdir -p build
 
-build/main.elf: $(SRC) | build
+build/$(VARIANT).elf: $(SRC) | build
 	$(CXX) $(CXXFLAGS) $(SRC) -o $@
 	avr-size -G --mcu=$(MCU) $@
 
-build/main.hex: build/main.elf
+build/$(VARIANT).hex: build/$(VARIANT).elf
 	avr-objcopy -O ihex -R .eeprom $< $@
 
 .PHONY: flash
-flash: build/main.hex
+flash: build/$(VARIANT).hex
 	$(AVRDUDE) -c $(PROGRAMMER) -p $(MCU) -U flash:w:$<:i
 
 # Fuses for this example: ATtiny85 on its internal 8 MHz RC. Fuses

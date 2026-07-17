@@ -130,8 +130,7 @@ void sampleTask() {
 }
 
 void put2(char* p, uint8_t v) {
-    p[0] = static_cast<char>('0' + (v / 10) % 10);
-    p[1] = static_cast<char>('0' + v % 10);
+    HAL::Utils::Fmt::fixed(p, v, 2);   // the shared formatter
 }
 
 // "2026-07-17 14:03:22  +23.75C  light 0512  vcc 4923mV" padded to
@@ -188,8 +187,10 @@ void logTask() {
 }
 
 void put2Lcd(uint8_t v) {
-    Lcd::write(static_cast<char>('0' + (v / 10) % 10));
-    Lcd::write(static_cast<char>('0' + v % 10));
+    char b[2];
+    HAL::Utils::Fmt::fixed(b, v, 2);
+    Lcd::write(b[0]);
+    Lcd::write(b[1]);
 }
 
 void displayTask() {
@@ -214,12 +215,8 @@ void displayTask() {
         return;
     }
     Lcd::print_P(PSTR("rec "));
-    uint32_t c { recCount };
     char buf[7];
-    for (int8_t i = 5; i >= 0; --i) {
-        buf[i] = static_cast<char>('0' + c % 10);
-        c /= 10;
-    }
+    HAL::Utils::Fmt::fixed(buf, recCount, 6);
     buf[6] = '\0';
     Lcd::print(buf);
     Lcd::write(' ');

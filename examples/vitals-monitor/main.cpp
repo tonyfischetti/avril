@@ -73,8 +73,10 @@ void makeBatteryGlyphs() {
 }
 
 void print2(uint8_t v) {
-    Lcd::write(static_cast<char>('0' + (v / 10) % 10));
-    Lcd::write(static_cast<char>('0' + v % 10));
+    char b[2];
+    HAL::Utils::Fmt::fixed(b, v, 2);   // the shared formatter
+    Lcd::write(b[0]);
+    Lcd::write(b[1]);
 }
 
 int main() {

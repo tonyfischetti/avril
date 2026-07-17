@@ -109,7 +109,9 @@
  *
  * Disturbance family:
  *
- *   - SW-18015P spring switch (the KY-002 module, ~$0.20): a spring
+ *   - SW-18015P spring switch (the KY-002 module, ~$0.20) -- NOW
+ *     IMPLEMENTED as this example's second variant: sw18015p.cpp,
+ *     built with `make VARIANT=sw18015p`. A spring
  *     in a tube that chatters against a contact when jolted. ZERO
  *     quiescent current -- it is literally a switch, and with the
  *     PCINT pull-up it draws nothing while still. The output is a
@@ -153,8 +155,17 @@ using Pir    = HAL::GPIO::GPIO<7>;   // PB2
 using Gate   = HAL::GPIO::GPIO<6>;   // PB1
 constexpr uint8_t BATT_PIN { 3 };    // PB4 = ADC2
 
-// 9 V block: ~9.5 V fresh, useless below ~6 V. The divider halves it,
-// the 5 V LDO rail is the ADC reference, so full scale reads 10.24 V
+// The low-battery threshold, and why it isn't arbitrary. A 9 V block
+// is six alkaline cells; 6.4 V (~1.07 V/cell) is the knee where the
+// discharge curve stops plateauing and starts to cliff -- warning
+// here leaves days of alarm function to swap the battery. The HARD
+// constraint is from below: the measurement reads the divider against
+// the 5 V rail as ADC reference, and once the battery sags to about
+// 5 V + the LDO's dropout (~5.5-6.0 V) that reference itself sags --
+// which makes the computed battery voltage OVERestimate exactly when
+// the battery is dying. The warning must fire while the reference is
+// still honest, i.e. comfortably above ~6 V. Tune within ~6.2-6.8 by
+// taste; don't go below.
 constexpr uint16_t LOW_BATT_MV { 6400 };
 
 // alarm shape: 10 beeps of ~500 ms on / ~500 ms off

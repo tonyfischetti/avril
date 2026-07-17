@@ -2,15 +2,24 @@
  * alarm-clock: a complete bedside alarm clock.
  *
  * What it does:
- *   - shows HH:MM on the LCD, ticking off the DS3231 (so the time
- *     survives power loss on the coin cell, +/-2 ppm);
+ *   - shows HH:MM:SS on the LCD, ticking off the DS3231 (so the time
+ *     survives power loss on the coin cell, +/-2 ppm). The seconds
+ *     tick on the RTC's OWN 1 Hz square wave, wired to a PCINT: each
+ *     falling edge IS the second boundary, so the display never
+ *     stutters the way an MCU-paced poll would (two almost-equal
+ *     clocks beating against each other);
  *   - press the knob to step through set modes: time hours -> time
  *     minutes -> alarm hours -> alarm minutes -> back to clock.
  *     Rotate to adjust the highlighted field. Edits are written to
  *     the RTC when you leave the last field of each pair;
  *   - long-press to arm/disarm the alarm (bell glyph on the display);
  *   - when the alarm matches, the LED blinks until any press
- *     silences it;
+ *     silences it. THE INTCN NUANCE: the DS3231's pin carries either
+ *     the alarms or the square wave, never both -- but this design
+ *     never needed the pin for alarms, because it polls the latched
+ *     A1F flag (alarmFired()) on each second-tick. The flag sets on
+ *     a match regardless of pin routing, so the pin is free to be
+ *     the heartbeat;
  *   - if the RTC reports its oscillator stopped (battery died), the
  *     clock boots straight into set mode instead of showing fiction.
  *
@@ -20,8 +29,12 @@
  * usually carry them already).
  *
  * Wiring (physical DIP-28 pins):
- *   SDA           -> PC4 (27)     both I2C modules in parallel
- *   SCL           -> PC5 (28)
+ *   SDA           -> PC4 (27)  \  ONE two-wire bus: the DS3231 and
+ *   SCL           -> PC5 (28)  /  the LCD backpack each connect BOTH
+ *                                 lines; the address byte picks who
+ *                                 answers
+ *   RTC INT/SQW   -> PD5 (11)     open-drain: the MCU's internal
+ *                                 pullup carries it
  *   encoder CLK   -> PD2 (4)
  *   encoder DT    -> PD3 (5)
  *   encoder SW    -> PD4 (6)
@@ -49,11 +62,13 @@ using I2c      = HAL::Comms::I2C::Master<100000>;
 using Lcd      = HAL::Devices::LCD1602<I2c>;
 using Rtc      = DS::Clock<I2c>;
 using AlarmLed = HAL::GPIO::GPIO<14>;       // PB0
+using Sqw      = HAL::GPIO::GPIO<11>;       // PD5: the RTC's 1 Hz beat
 
 HAL::Devices::RotaryEncoderWithButton<6, 30, 1000, HIGH, true,  // button
                                       4, 5, true> knob;         // clk, dt
 
 volatile uint8_t previousPIND { 0xFF };
+volatile bool    secondTickP  { true };   // true at boot: paint at once
 
 ISR(PCINT2_vect) {
     uint32_t now { HAL::Ticker::getNumTicks() };
@@ -61,6 +76,8 @@ ISR(PCINT2_vect) {
     uint8_t  ch  { static_cast<uint8_t>(cur ^ previousPIND) };
     previousPIND = cur;
     knob.notifyInterruptOccurred(now, HAL::GPIO::Port::D, ch);
+    // the RTC's falling edge IS the second boundary
+    if ((ch & Sqw::mask) && !Sqw::read()) secondTickP = true;
 }
 
 enum class Mode : uint8_t {
@@ -145,17 +162,21 @@ void onLongPress() {
 }
 
 void print2(uint8_t v) {
-    Lcd::write(static_cast<char>('0' + v / 10));
-    Lcd::write(static_cast<char>('0' + v % 10));
+    char b[2];
+    HAL::Utils::Fmt::fixed(b, v, 2);   // the shared formatter
+    Lcd::write(b[0]);
+    Lcd::write(b[1]);
 }
 
 void repaint() {
     Lcd::setCursor(0, 0);
-    Lcd::print_P(PSTR("   "));
+    Lcd::print_P(PSTR("    "));
     print2(now.hour);
     Lcd::write(':');
     print2(now.minute);
-    Lcd::print_P(PSTR("        "));
+    Lcd::write(':');
+    print2(now.second);
+    Lcd::print_P(PSTR("    "));
 
     Lcd::setCursor(0, 1);
     Lcd::write(armedP ? static_cast<char>(0) : ' ');   // bell glyph
@@ -183,6 +204,9 @@ int main() {
 
     UART::println_P(PSTR("alarm-clock boot"));
 
+    Sqw::setInputPullup();   // INT/SQW is open-drain
+    Sqw::enablePCINT();
+
     Lcd::begin();
     static const uint8_t bell[8] { 0x04, 0x0E, 0x0E, 0x0E,
                                    0x1F, 0x00, 0x04, 0x00 };
@@ -201,24 +225,25 @@ int main() {
         mode = Mode::SET_TIME_H;
     }
     programAlarm();
+    // the display's timebase: the RTC's own second boundary (see the
+    // INTCN nuance in the header -- alarms stay on the polled flag)
+    Rtc::enableSquareWave(DS::SqwFreq::HZ_1);
 
     knob.setOnCW([]()  { adjust(+1); });
     knob.setOnCCW([]() { adjust(-1); });
     knob.setOnPress(&onPress);
     knob.setOnLongPress(&onLongPress);
 
-    uint32_t lastPoll { 0 };
-
     while (1) {
         knob.process();
 
-        // once a second: refresh the time and check the alarm flag
-        uint32_t ticks { HAL::Ticker::getNumTicks() };
-        if (mode == Mode::CLOCK && ticks - lastPoll >= 1000) {
-            lastPoll = ticks;
-            uint8_t prevMinute { now.minute };
+        // each RTC second-boundary: refresh the time and check the
+        // alarm flag. No MCU-side pacing arithmetic at all -- the
+        // wall clock itself says when a second has passed
+        if (secondTickP && mode == Mode::CLOCK) {
+            secondTickP = false;
             if (Rtc::getTime(now) == HAL::Comms::I2C::Result::OK) {
-                if (now.minute != prevMinute) dirtyP = true;
+                dirtyP = true;   // seconds are showing: every tick
                 bool a1 { false };
                 bool a2 { false };
                 if (armedP && !ringingP
@@ -226,7 +251,6 @@ int main() {
                                == HAL::Comms::I2C::Result::OK
                         && a1) {
                     ringingP = true;
-                    dirtyP   = true;
                     UART::println_P(PSTR("ALARM"));
                 }
             }
@@ -234,6 +258,7 @@ int main() {
 
         if (ringingP) {
             // ~4 Hz blink off the tick counter
+            uint32_t ticks { HAL::Ticker::getNumTicks() };
             if (ticks & 0x80) AlarmLed::setHigh(); else AlarmLed::setLow();
         }
 

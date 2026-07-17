@@ -25,8 +25,9 @@
  * classic, and most TV/media remotes are NEC too).
  *
  * The TSOP wants Vishay's supply filter (100R series + >=0.1 uF to
- * GND at its Vs pin); breakout boards usually include it, a bare can
- * does not.
+ * GND at its Vs pin): the can's ~56x AGC amplifier is sensitive
+ * enough that supply ripple reads as phantom IR. Breakout boards
+ * usually include it; a bare can does not. Details: TSOP4838.md §1.
  *
  * Wiring (physical DIP-28 pins):
  *   TSOP OUT -> PD2 (4)      (any PCINT pin works; it idles HIGH on
@@ -36,6 +37,11 @@
  *
  * This is a bench tool: it stays awake in IDLE (getMicros() must
  * keep running to timestamp edges; there is no battery to protect).
+ * Deliberately ABSENT: the driver's busy() sleep-gate predicate --
+ * that guards PWR_DOWN (which freezes the us clock mid-frame), a
+ * hazard IDLE doesn't have, since Timer0 keeps counting through it.
+ * Any PWR_DOWN consumer must gate on !ir.busy(); see the driver
+ * docs and TSOP4838.md §9.
  *
  * Exercises: IRReceiverNEC (the timestamp-first ISR discipline),
  * LCD1602, UART, Ticker, Sleep.
@@ -72,15 +78,18 @@ uint16_t pressCount  { 0 };
 uint16_t repeatCount { 0 };
 
 void print3(uint16_t v) {
-    Lcd::write(static_cast<char>('0' + (v / 100) % 10));
-    Lcd::write(static_cast<char>('0' + (v / 10) % 10));
-    Lcd::write(static_cast<char>('0' + v % 10));
+    char b[3];
+    HAL::Utils::Fmt::fixed(b, v, 3);   // the shared formatter
+    Lcd::write(b[0]);
+    Lcd::write(b[1]);
+    Lcd::write(b[2]);
 }
 
 void printHexLcd(uint8_t v) {
-    constexpr char digits[] = "0123456789ABCDEF";
-    Lcd::write(digits[v >> 4]);
-    Lcd::write(digits[v & 0x0F]);
+    char b[2];
+    HAL::Utils::Fmt::hex8(b, v);       // ditto for hex
+    Lcd::write(b[0]);
+    Lcd::write(b[1]);
 }
 
 void repaint(uint8_t addr, uint8_t cmd) {

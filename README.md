@@ -30,6 +30,7 @@ ATMega328P.
   - [`IntTransitionDebouncer` — interrupt-driven debouncing](#inttransitiondebouncer--interrupt-driven-debouncing)
   - [`LFSR` — fast 8-bit pseudorandomness](#lfsr--fast-8-bit-pseudorandomness)
   - [`Scheduler` — tick-less cooperative task table](#scheduler--tick-less-cooperative-task-table)
+  - [`Fmt` — sink-agnostic number formatting](#fmt--sink-agnostic-number-formatting)
 - [Devices](#devices)
   - [`Button`](#button)
   - [`RotaryEncoder`](#rotaryencoder)
@@ -789,6 +790,32 @@ is exactly why a logger should timestamp records from an RTC, not from
 the scheduler. At one or two cadences, skip this and use the idiom; it
 earns its keep at three-plus (see `examples/weather-logger`).
 
+### `Fmt` — sink-agnostic number formatting
+
+`utils/format.hpp`, `HAL::Utils::Fmt`: every converter writes into a
+*caller's buffer*, and every sink — UART, LCD, a log record — prints
+the result. Before it existed, the decimal digit-peel lived in three
+places, the INT32_MIN negation trick in two, and six examples each
+grew their own zero-padded `print2`; now each lives once:
+
+```cpp
+char b11[11];  UART::print(Fmt::u32(b11, n));   // NUL-terminated
+char b12[12];  Lcd::print(Fmt::s32(b12, n));    // sign + the MIN trick
+char f[6];     Fmt::fixed(f, v, 6);   // zero-padded FIELD, no NUL --
+                                      // clock digits, record columns
+char h[8];     Fmt::hex32(h, v);      // fixed-width uppercase fields
+char bits[8];  Fmt::bin8(bits, reg);  // the register dump's native tongue
+```
+
+Two things worth knowing: the **termination convention** (`u32`/`s32`
+return C strings; `fixed`/`hex*`/`bin8` are field writers emitting
+exactly N chars, no terminator — the width is the contract); and it's
+**dependency-free pure computation, host-tested** — `tests/format_test.cpp`
+checks every edge (all `uint32_t` digit boundaries, INT32_MIN, all 256
+hex bytes) against the host's `snprintf`. Touch the file, run the test.
+`UART::print` and `Lcd::print` are now thin pairings of these
+formatters with their sinks.
+
 ## Devices
 
 Device drivers compose debouncers and add semantics. All follow the same
@@ -974,6 +1001,11 @@ Worth knowing:
   module's `ping()` scanner settles it in seconds.
 - Write-only by design (RW is held low); the busy flag is never read —
   bus timing already exceeds instruction timing.
+- **Drives 20×4 (LCD2004) panels unmodified** — same controller, same
+  backpack, and `setCursor` knows all four rows' interleaved DDRAM
+  offsets (0x00/0x40/0x14/0x54; row 2 continues row 0's memory, which
+  is why overflowing row 0 reappears there). The name honors the
+  namesake, not a limit.
 
 ### `DS3231::Clock` — wall-clock time and alarms
 
@@ -1070,6 +1102,11 @@ Worth knowing:
 - The TSOP itself draws ~0.4 mA **continuously** — on battery, the
   receiver (not the MCU) becomes the idle floor. A decision to make
   knowingly; see the design doc's power section.
+- **Wiring: Vishay's supply filter** (~100 Ω series + ≥0.1 µF to GND at
+  the Vs pin) is required on a *bare* TSOP — its high-gain AGC front
+  end reads supply ripple as phantom IR, and fast-switching neighbors
+  (LED strips!) are the classic aggressor. Breakout boards usually
+  include it. Details in TSOP4838.md §1.
 
 ### `SD::Card` — raw-block SD storage
 
@@ -1179,16 +1216,24 @@ avril tree it lives in. They are the living demonstrations of the
 canonical loop below. Current residents:
 
 - **`alarm-clock`** (328P): a real bedside alarm clock — DS3231 time
-  with battery backup, LCD1602 face, rotary-encoder set-time/set-alarm
-  UI, long-press to arm, blinking LED wake-up, and the RTC's
-  stale-time honesty check on boot. Under 4 KB of flash.
-- **`mp3-player`** (328P): the full jukebox — every `.MP3` in a FAT32
-  card's root, auto-advancing; knob for prev/next, press to pause,
-  pressed-rotate for volume; LCD now-playing with filename, track
-  count, the codec's own decode time, and play/pause glyphs; every
-  bring-up failure named on the display ("no SD card", …). The
-  data-pump architecture from the module docs, running for real, in
-  ~7 KB.
+  with battery backup, seconds ticking on the RTC's *own* 1 Hz square
+  wave (each falling edge is the second boundary, so the display never
+  stutters — and the alarm still works, since it's detected by the
+  polled flag, not the shared pin), LCD1602 face, rotary-encoder
+  set-time/set-alarm UI, long-press to arm, blinking LED wake-up, and
+  the stale-time honesty check on boot. Under 4 KB of flash.
+- **`mp3-player`** (328P): the full jukebox — **playlists as folders**
+  (each root directory is a playlist named by its dirname; loose root
+  `.MP3`s are the implicit "ALL"; long-press browses, rotate scrolls
+  names + track counts, press selects — music keeps playing while you
+  browse), auto-advance within the playlist, knob for prev/next,
+  press to pause, pressed-rotate for volume; **ID3v2 tags skipped
+  before pumping** (ten lines of syncsafe-length parsing + one seek
+  kill the seconds of silence that embedded album art costs at pump
+  rate); LCD now-playing with filename, track count, the codec's own
+  decode time, and play/pause glyphs; every bring-up failure named on
+  the display. The data-pump architecture from the module docs,
+  running for real, in ~9 KB.
 - **`vitals-monitor`** (tiny84): battery voltage (the bandgap-against-
   Vcc trick, with a programmatically-drawn battery-icon gauge), on-die
   temperature, and a photoresistor percent on an LCD — waking from
@@ -1202,7 +1247,12 @@ canonical loop below. Current residents:
   pulldown, flyback diode, micropower-LDO-not-a-buck, the divider's
   cap) — plus a sensor-alternatives survey (EKMB, RCWL-0516, spring
   switches, piezo discs) covering the presence-vs-disturbance split
-  and each option's power budget. 1 KB of flash.
+  and each option's power budget. Two variants of one circuit:
+  `pir.cpp` (the room alarm, default) and `sw18015p.cpp`
+  (`make VARIANT=sw18015p`) — a bike/tamper alarm with warn-then-
+  escalate behavior whose spring switch draws *zero* at rest,
+  dropping the armed floor to ~8 µA: the 9 V dies of shelf-life
+  self-discharge before the alarm can drain it. 1 KB of flash each.
 - **`ir-probe`** (328P): the IR *learning tool* — point any NEC remote
   at it and every button shows its address/command in hex on the LCD
   (live repeat counter while held) and as copy-pasteable UART lines,
@@ -1217,6 +1267,13 @@ canonical loop below. Current residents:
   written raw into a computer-preallocated `LOG.CSV` that still opens
   in any editor. Approximate scheduling, exact data. Power-loss resume
   by binary-searching for the first blank block.
+- **`serial-console`** (328P): single-key terminal commands — LED
+  control, the Analog meters, a help menu — as the simplest real use
+  of polled UART receive. Receive errors are *reported*, not
+  swallowed: set your terminal to the wrong baud on purpose and watch
+  `[frame error — baud mismatch?]` diagnose it live. The header does
+  the polling-cadence math (why single keys are safe at 9600 and
+  where the future ring buffer begins). 1.4 KB.
 
 ## Putting it together: the canonical main loop
 

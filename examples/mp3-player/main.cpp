@@ -2,12 +2,25 @@
  * mp3-player: a complete SD-card jukebox.
  *
  * What it does:
- *   - mounts a FAT32 card and plays every .MP3 in the root directory,
- *     auto-advancing at each track's end (wrapping at the last);
- *   - rotate the knob for previous/next track;
+ *   - mounts a FAT32 card and plays .MP3s, auto-advancing at each
+ *     track's end (wrapping at the last);
+ *   - PLAYLISTS ARE FOLDERS: each root-level directory is a playlist
+ *     named by its directory name, and loose .MP3s in the root form
+ *     the implicit "ALL" playlist. Long-press enters the playlist
+ *     browser (rotate scrolls names + track counts, press selects
+ *     and starts track 1, long-press again cancels). Track order
+ *     within a playlist is directory order, i.e. copy order --
+ *     01-/02- filename prefixes are the traditional fix. 8.3 names
+ *     apply to folders too (ROADTRIP yes, "Road Trip" -> ROADTR~1);
+ *   - rotate the knob for previous/next track (within the playlist);
  *   - press to pause/resume (the codec just stops being fed; its FIFO
  *     picks up seamlessly on resume);
  *   - rotate WHILE pressed for volume;
+ *   - ID3v2 TAGS ARE SKIPPED before pumping: modern rips carry
+ *     50-500 KB of embedded album art up front, which the VS1053
+ *     would chew through silently for seconds at the pump's ~40 KB/s.
+ *     Ten lines of header parsing and one Fat::seek() make every
+ *     track start instantly;
  *   - LCD shows the filename and play/pause state on row 0; track
  *     number, decode time (from the codec itself), and volume on
  *     row 1;
@@ -23,7 +36,8 @@
  * Parts: ATmega328P @ 16 MHz, microSD module (level-shifted), VS1053b
  * breakout, LCD1602 + PCF8574 backpack, KY-040-style encoder with
  * push button. I2C wants 4.7k pull-ups (the backpack usually has
- * them). The card: FAT32, .MP3 files in the root, 8.3 names.
+ * them). The card: FAT32; .MP3s loose in the root and/or grouped
+ * into root-level playlist folders; 8.3 names throughout.
  *
  * Wiring (physical DIP-28 pins):
  *   SPI: MOSI PB3 (17), MISO PB4 (18), SCK PB5 (19)   shared bus
@@ -89,15 +103,37 @@ bool          playingP  { false };
 bool          pausedP   { false };
 uint8_t       volAtt    { 0x30 };  // attenuation: smaller = louder
 
+// the current playlist: a root-level directory's cluster, or 0 for
+// the implicit "ALL" playlist (loose .MP3s in the root itself)
+uint32_t      playlistCluster { 0 };
+char          playlistName[13] = "ALL";
+
+// playlist browser state (music keeps playing while browsing)
+bool          browsingP  { false };
+uint8_t       browseIdx  { 0 };
+
 // requests from the knob callbacks, acted on in the main loop so
 // track switching never happens in the middle of a pump pass
 int8_t        trackDelta      { 0 };
+int8_t        browseDelta     { 0 };
 bool          togglePauseReq  { false };
+bool          browseToggleReq { false };
+bool          browseSelectReq { false };
 bool          dirtyP          { true };
 
-void onCW()        { trackDelta     = static_cast<int8_t>(trackDelta + 1); }
-void onCCW()       { trackDelta     = static_cast<int8_t>(trackDelta - 1); }
-void onPress()     { togglePauseReq = true; }
+void onCW() {
+    if (browsingP) browseDelta = static_cast<int8_t>(browseDelta + 1);
+    else           trackDelta  = static_cast<int8_t>(trackDelta + 1);
+}
+void onCCW() {
+    if (browsingP) browseDelta = static_cast<int8_t>(browseDelta - 1);
+    else           trackDelta  = static_cast<int8_t>(trackDelta - 1);
+}
+void onPress() {
+    if (browsingP) browseSelectReq = true;
+    else           togglePauseReq  = true;
+}
+void onLongPress() { browseToggleReq = true; }
 void onPressedCW() {
     if (volAtt >= 4) volAtt = static_cast<uint8_t>(volAtt - 4);  // louder
     Mp3::setVolume(volAtt, volAtt);
@@ -109,23 +145,38 @@ void onPressedCCW() {
     dirtyP = true;
 }
 
-// ---- playlist: the root directory itself, filtered to .MP3 --------
+// ---- playlists: root-level folders, filtered to .MP3 --------------
 
+// where the CURRENT playlist's entries live: a folder's cluster, or
+// the root for "ALL"
+Fat::DirIter playlistDir() {
+    return playlistCluster ? Fat::DirIter { playlistCluster, 0 }
+                           : Fat::root();
+}
+
+// On-disk 8.3 names are uppercase BY SPEC -- "song.mp3" dragged from
+// any OS is stored as "SONG    MP3"; the lowercase you see in Finder
+// is presentation (an LFN record or the NT-reserved byte's display
+// flags, both of which the FAT layer ignores). So this comparison
+// meets uppercase in practice; the `| 0x20` folds are cheap insurance
+// against spec-violating writers that stuff lowercase into the field
 bool isMp3(const Fat::FileInfo& fi) {
     if (fi.dirP) return false;
     uint8_t len { 0 };
     while (fi.name[len] != '\0') ++len;
     return len > 4
         && fi.name[len - 4] == '.'
-        && fi.name[len - 3] == 'M'
-        && fi.name[len - 2] == 'P'
+        && (fi.name[len - 3] | 0x20) == 'm'
+        && (fi.name[len - 2] | 0x20) == 'p'
         && fi.name[len - 1] == '3';
 }
 
-// no track table in RAM: to find track N, walk the directory again.
-// Iteration is a handful of windowed reads -- cheap enough per switch
+// no track table in RAM: to find track N, walk the playlist's
+// directory again. Iteration is a handful of windowed reads --
+// cheap enough per switch. (Subdirectories' "." and ".." entries
+// are directories, so the dirP filter skips them for free)
 bool trackByIndex(uint8_t idx, Fat::FileInfo& out) {
-    Fat::DirIter it { Fat::root() };
+    Fat::DirIter it { playlistDir() };
     uint8_t n { 0 };
     while (Fat::next(it, out) == HAL::FS::Result::OK) {
         if (isMp3(out)) {
@@ -136,8 +187,7 @@ bool trackByIndex(uint8_t idx, Fat::FileInfo& out) {
     return false;
 }
 
-uint8_t countTracks() {
-    Fat::DirIter  it { Fat::root() };
+uint8_t countTracksIn(Fat::DirIter it) {
     Fat::FileInfo fi;
     uint8_t n { 0 };
     while (Fat::next(it, fi) == HAL::FS::Result::OK) {
@@ -146,14 +196,69 @@ uint8_t countTracks() {
     return n;
 }
 
+uint8_t countTracks() { return countTracksIn(playlistDir()); }
+
+// playlist N: index 0 is the implicit "ALL" (the root itself);
+// 1.. are the root's directories in directory order
+bool playlistByIndex(uint8_t idx, Fat::FileInfo& out) {
+    if (idx == 0) return true;   // ALL: caller uses cluster 0
+    Fat::DirIter  it { Fat::root() };
+    uint8_t n { 1 };
+    while (Fat::next(it, out) == HAL::FS::Result::OK) {
+        if (out.dirP) {
+            if (n == idx) return true;
+            ++n;
+        }
+    }
+    return false;
+}
+
+uint8_t countPlaylists() {
+    Fat::DirIter  it { Fat::root() };
+    Fat::FileInfo fi;
+    uint8_t n { 1 };   // "ALL" always exists
+    while (Fat::next(it, fi) == HAL::FS::Result::OK) {
+        if (fi.dirP && n < 255) ++n;
+    }
+    return n;
+}
+
 // ---- display ------------------------------------------------------
 
 void print2(uint8_t v) {
-    Lcd::write(static_cast<char>('0' + (v / 10) % 10));
-    Lcd::write(static_cast<char>('0' + v % 10));
+    char b[2];
+    HAL::Utils::Fmt::fixed(b, v, 2);   // the shared formatter
+    Lcd::write(b[0]);
+    Lcd::write(b[1]);
+}
+
+// browse mode: "<ROADTRIP>      " / "12 tracks       "
+void repaintBrowse() {
+    Fat::FileInfo pl;
+    bool okP { playlistByIndex(browseIdx, pl) };
+    Lcd::setCursor(0, 0);
+    Lcd::write('<');
+    uint8_t i { 0 };
+    if (browseIdx == 0) {
+        Lcd::print_P(PSTR("ALL"));
+        i = 3;
+    } else if (okP) {
+        while (pl.name[i] != '\0') { Lcd::write(pl.name[i]); ++i; }
+    }
+    Lcd::write('>');
+    for (i = static_cast<uint8_t>(i + 2); i < 16; ++i) Lcd::write(' ');
+
+    Lcd::setCursor(0, 1);
+    uint8_t n { 0 };
+    if (browseIdx == 0) n = countTracksIn(Fat::root());
+    else if (okP)       n = countTracksIn(Fat::openDir(pl));
+    print2(n);
+    Lcd::print_P(PSTR(" tracks       "));
 }
 
 void repaint() {
+    if (browsingP) { repaintBrowse(); return; }
+
     Lcd::setCursor(0, 0);
     Lcd::write(pausedP ? static_cast<char>(1) : static_cast<char>(0));
     Lcd::write(' ');
@@ -189,9 +294,34 @@ void die(const char* msg) {
 
 // ---- playback -----------------------------------------------------
 
+// ID3 phase 1: hop over the ID3v2 tag. Modern rips carry 50-500 KB
+// of embedded album art up front; the VS1053 skips it, but only as
+// fast as we pump (~40 KB/s) -- seconds of silence per track. The
+// tag announces its own size: "ID3", version, flags, then a 28-bit
+// SYNCSAFE length (7 bits per byte, high bits zero, so the size
+// can't contain a false frame-sync). Footer flag (bit 4) adds 10
+void skipId3(Fat::File& f) {
+    uint8_t  h[10];
+    uint16_t got;
+    if (Fat::read(f, h, 10, got) != HAL::FS::Result::OK || got < 10
+            || h[0] != 'I' || h[1] != 'D' || h[2] != '3') {
+        Fat::seek(f, 0);   // no tag: rewind the peek
+        return;
+    }
+    uint32_t size { (static_cast<uint32_t>(h[6] & 0x7F) << 21)
+                  | (static_cast<uint32_t>(h[7] & 0x7F) << 14)
+                  | (static_cast<uint32_t>(h[8] & 0x7F) << 7)
+                  |  static_cast<uint32_t>(h[9] & 0x7F) };
+    uint32_t skip { 10 + size + ((h[5] & 0x10) ? 10UL : 0UL) };
+    if (Fat::seek(f, skip) != HAL::FS::Result::OK) {
+        Fat::seek(f, 0);   // tag claims more than the file: play raw
+    }
+}
+
 void startTrack(uint8_t idx) {
     if (!trackByIndex(idx, songInfo)) return;
     Fat::open(songInfo, song);
+    skipId3(song);
     bufLen = bufUsed = 0;
     playingP = true;
     pausedP  = false;
@@ -263,6 +393,7 @@ int main() {
     knob.setOnCW(&onCW);
     knob.setOnCCW(&onCCW);
     knob.setOnPress(&onPress);
+    knob.setOnLongPress(&onLongPress);
     knob.setOnPressedCW(&onPressedCW);
     knob.setOnPressedCCW(&onPressedCCW);
 
@@ -272,6 +403,57 @@ int main() {
 
     while (1) {
         knob.process();
+
+        // playlist browser (music keeps playing underneath)
+        if (browseToggleReq) {
+            browseToggleReq = false;
+            browsingP = !browsingP;   // long-press: enter, or cancel
+            browseIdx = 0;
+            dirtyP    = true;
+        }
+        if (browsingP && browseDelta != 0) {
+            uint8_t count { countPlaylists() };
+            int16_t b { static_cast<int16_t>(browseIdx + browseDelta) };
+            browseDelta = 0;
+            while (b < 0) b = static_cast<int16_t>(b + count);
+            browseIdx = static_cast<uint8_t>(b % count);
+            dirtyP    = true;
+        }
+        if (browseSelectReq) {
+            browseSelectReq = false;
+            Fat::FileInfo pl;
+            if (playlistByIndex(browseIdx, pl)) {
+                uint32_t cluster { browseIdx == 0 ? 0
+                                                  : pl.firstCluster };
+                uint8_t n { browseIdx == 0
+                    ? countTracksIn(Fat::root())
+                    : countTracksIn(Fat::openDir(pl)) };
+                if (n == 0) {
+                    Lcd::setCursor(0, 1);
+                    Lcd::print_P(PSTR("empty!        "));
+                } else {
+                    playlistCluster = cluster;
+                    uint8_t i { 0 };
+                    if (browseIdx == 0) {
+                        playlistName[0] = 'A'; playlistName[1] = 'L';
+                        playlistName[2] = 'L'; playlistName[3] = '\0';
+                    } else {
+                        while (pl.name[i] != '\0' && i < 12) {
+                            playlistName[i] = pl.name[i];
+                            ++i;
+                        }
+                        playlistName[i] = '\0';
+                    }
+                    numTracks = n;
+                    curTrack  = 0;
+                    browsingP = false;
+                    if (playingP) Mp3::stopTrack();
+                    startTrack(0);
+                    UART::print("playlist: ");
+                    UART::println(playlistName);
+                }
+            }
+        }
 
         // act on knob requests here, never mid-pump
         if (trackDelta != 0) {

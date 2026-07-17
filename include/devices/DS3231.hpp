@@ -20,8 +20,13 @@
  *
  * THE GOTCHA, worth reading twice: the alarm flags (A1F/A2F in the
  * status register) latch, and INT stays low until *you* clear them
- * with clearAlarmFlags(). Forget that, and your daily alarm fires
- * exactly once per battery.
+ * with clearAlarmFlags(). Forget that and the failure is sneaky: the
+ * alarm rings once, then never again -- the next match finds the flag
+ * still set and INT already low, and a pin that is already low cannot
+ * produce a falling edge to wake anything. Because the coin cell
+ * keeps the latch alive across every MCU reboot and reflash, the only
+ * event that resets it is the DS3231 losing ALL power. In other
+ * words: your daily alarm fires exactly once per battery.
  *
  * Honesty feature: the oscillator-stop flag (OSF) is the chip
  * confessing "power AND battery were lost at some point; the time I

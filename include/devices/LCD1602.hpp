@@ -6,11 +6,16 @@
 #include <avr/pgmspace.h>
 
 #include "../comms/i2c.hpp"
+#include "../utils/format.hpp"
 
 /**
  * 16x2 character LCD (HD44780 controller) behind the ubiquitous
  * PCF8574 I2C "backpack" -- the classic $2 way to get text output on
  * two wires. Works on all three MCUs, since the I2C module does.
+ * Also drives 20x4 (LCD2004) panels unmodified: same controller,
+ * same backpack, and setCursor knows all four rows' interleaved
+ * DDRAM offsets. (The name stays LCD1602; the 16x2 is the namesake,
+ * not the limit.)
  *
  * How the backpack works: the PCF8574 is just an 8-bit I2C GPIO
  * expander wired to the LCD in 4-bit mode --
@@ -118,9 +123,15 @@ struct LCD1602 {
     }
 
     static Result setCursor(uint8_t col, uint8_t row) {
-        // row 1 starts at DDRAM 0x40 on a 16x2
-        return command(static_cast<uint8_t>(
-            0x80 | (col + (row ? 0x40 : 0))));
+        // HD44780 DDRAM rows are interleaved: 0x00, 0x40, 0x14, 0x54.
+        // Rows 0/1 cover the 16x2; rows 2/3 make this driver serve
+        // 20x4 (LCD2004) panels too -- same controller, same
+        // backpack. (Row 2 continues row 0's memory, which is why
+        // overflowing row 0 famously reappears on row 2.) The
+        // offsets decompose branch-free:
+        uint8_t offset { static_cast<uint8_t>(
+            ((row & 1) ? 0x40 : 0) + ((row & 2) ? 0x14 : 0)) };
+        return command(static_cast<uint8_t>(0x80 | (col + offset)));
     }
 
     // display / cursor / blink in one call (they share a register)
@@ -160,24 +171,16 @@ struct LCD1602 {
         return Result::OK;
     }
 
+    // formatting lives in utils/format.hpp, host-tested; these pair
+    // the formatters with this sink
     static Result print(uint32_t n) {
         char buf[11];
-        char* p { buf + 10 };
-        *p = '\0';
-        do {
-            *--p = static_cast<char>('0' + static_cast<uint8_t>(n % 10));
-            n /= 10;
-        } while (n != 0);
-        return print(p);
+        return print(HAL::Utils::Fmt::u32(buf, n));
     }
 
     static Result print(int32_t n) {
-        if (n < 0) {
-            Result r { write('-') };
-            if (r != Result::OK) return r;
-            return print(0U - static_cast<uint32_t>(n));
-        }
-        return print(static_cast<uint32_t>(n));
+        char buf[12];
+        return print(HAL::Utils::Fmt::s32(buf, n));
     }
 
     // custom 5x8 glyphs, slots 0..7: glyph[i] holds row i's five
