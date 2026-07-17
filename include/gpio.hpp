@@ -165,13 +165,25 @@ struct GPIO {
     }
 
   public:
+    // always_inline: each of these compiles to a single sbi/cbi/sbic,
+    // the same size as the rcall that would otherwise replace it -- so
+    // inlining never loses, and -Os's cold-path heuristics (which
+    // would happily emit a call "because the branch is unlikely")
+    // must not get a vote
+    __attribute__((always_inline))
     static inline void setOutput() { ddrReg()  |=  mask; }
+    __attribute__((always_inline))
     static inline void setInput()  { ddrReg()  &= static_cast<uint8_t>(~mask); }
+    __attribute__((always_inline))
     static inline void setHigh()   { portReg() |=  mask; }
+    __attribute__((always_inline))
     static inline void setLow()    { portReg() &= static_cast<uint8_t>(~mask); }
+    __attribute__((always_inline))
     static inline void toggle()    { portReg() ^=  mask; }
+    __attribute__((always_inline))
     static inline bool read()      { return pinReg() & mask; }
 
+    __attribute__((always_inline))
     static inline void setInputPullup() { setInput(); setHigh(); }
 
     static inline void enablePCINT() {

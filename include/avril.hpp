@@ -8,6 +8,7 @@
 #include "sleep.hpp"
 #include "ticker.hpp"
 
+#include "comms/i2c.hpp"
 #include "comms/spi.hpp"
 #include "comms/uart.hpp"
 

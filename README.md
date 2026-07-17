@@ -20,6 +20,7 @@ ATMega328P.
   - [`sleep.hpp` — sleep-mode helper](#sleephpp--sleep-mode-helper)
   - [`watchdog.hpp` — timed wake-ups from power-down](#watchdoghpp--timed-wake-ups-from-power-down)
 - [Comms](#comms)
+  - [`comms/i2c.hpp` — blocking I²C master](#commsi2chpp--blocking-ic-master)
   - [`comms/spi.hpp` — blocking SPI master](#commsspihpp--blocking-spi-master)
   - [`comms/uart.hpp` — debug serial (ATmega328P only)](#commsuarthpp--debug-serial-atmega328p-only)
 - [Utils](#utils)
@@ -365,10 +366,9 @@ not accurate.
 Buses for talking to *other chips*, as distinct from the top-level modules
 (the MCU's own facilities), `devices/` (things wired to pins), and
 `utils/` (software helpers). Everything here lives under `HAL::Comms::`,
-mirroring how `devices/` maps to `HAL::Devices`. Planned residents beyond
-these two: I²C. Note that drivers for chips that *sit on* a bus (an SD
-card, an MCP2515) belong in `devices/`, consuming a comms module — bus
-versus thing-on-the-bus is the boundary.
+mirroring how `devices/` maps to `HAL::Devices`. Note that drivers for
+chips that *sit on* a bus (an SD card, an MCP2515) belong in `devices/`,
+consuming a comms module — bus versus thing-on-the-bus is the boundary.
 
 The extra namespace level costs a few characters at every debug print;
 the idiomatic relief is an alias at the top of an app file:
@@ -376,6 +376,65 @@ the idiomatic relief is an alias at the top of an app file:
 ```cpp
 namespace UART = HAL::Comms::UART;   // then UART::println(...) as before
 ```
+
+### `comms/i2c.hpp` — blocking I²C master
+
+Transaction-shaped, error-honest, and available on **all three MCUs** —
+the 328P through its hardware TWI peripheral, the tinies through a
+bit-banged open-drain master on **any two pins**:
+
+```cpp
+// 328P (fixed pins SDA=PC4/27, SCL=PC5/28):
+using I2c = HAL::Comms::I2C::Master<100000>;          // ceiling in Hz
+// tinies (pins are template params, then the ceiling):
+using I2c = HAL::Comms::I2C::Master<5, 7, 100000>;    // SDA, SCL
+
+I2c::begin();
+uint8_t reg { 0x0F };
+uint8_t id;
+if (I2c::writeRead(0x48, &reg, 1, &id, 1) == HAL::Comms::I2C::Result::OK) {
+    // wrote the register pointer, repeated-START, read one byte back
+}
+```
+
+The API is `write(addr7, buf, len, stopP)` / `read(...)` /
+`writeRead(...)` / `ping(addr7)`, and **every call returns a `Result`**:
+`OK`, `NACK_ADDR` (nobody home), `NACK_DATA` (device rejected a byte),
+`BUS_ERROR`, or `TIMEOUT`. Unlike SPI, I²C can fail — a missing device,
+a wedged one holding SCL low, absent pull-ups — so **every wait in the
+module is bounded** and a dead bus becomes an error code, never a hung
+main loop. On any error the module sends a STOP to free the bus before
+returning.
+
+Things worth knowing:
+
+- **Addresses are 7-bit** (0x00–0x7F); the R/W bit is the module's
+  business. A datasheet that says "write address 0x78, read address
+  0x79" means the 7-bit address 0x3C.
+- **Pull-ups are mandatory physics.** The lines are open-drain and only
+  ever driven low. On the 328P the internal ~35k pull-ups are enabled by
+  default (template param) and can carry a short bench wire at 100 kHz —
+  marginal beyond that; fit 4.7k resistors for anything real. On the
+  tinies **external pull-ups are required, full stop**: the open-drain
+  emulation keeps PORT at 0 so DDR alone flips between drive-low and
+  release, which makes the internal pull-ups unusable by construction.
+- **`writeRead` is the sensor idiom** — register pointer, then repeated
+  START (no STOP in between: a STOP would let another master barge in,
+  and many parts reset their register pointer on it), then read. The
+  `stopP=false` argument on `write`/`read` exposes the same mechanism
+  for hand-rolled transaction shapes.
+- **`ping(addr7)`** is an address probe: loop it over 0x08–0x77 and
+  that's a bus scanner.
+- **Clock stretching is honored in both backends** — in hardware on the
+  328P, and in the bit-banged master by waiting (bounded) for SCL to
+  actually rise after releasing it.
+- **`maxHz` is a ceiling**, as in the SPI module. The 328P picks the
+  largest TWBR rate at or below it (build fails outside TWBR's range:
+  ~30–444 kHz at 16 MHz); the bit-banged backend times half-periods to
+  the ceiling and its loop overhead only slows it further.
+- **Master only, blocking, no ISR** — one transaction at a time, errors
+  where you can see them. An I²C *slave* is a planned separate module;
+  it is ISR-driven by nature and a different beast entirely.
 
 ### `comms/spi.hpp` — blocking SPI master
 
@@ -785,3 +844,5 @@ the ISR must `Ticker::resume()` before reading time).
 - **SPI is master-only and blocking** (deliberately — see its section);
   slave mode would need an interrupt-driven design the USI and SPI
   peripherals support but this module doesn't attempt.
+- **I²C is master-only and blocking** too; the slave — ISR-driven by
+  nature — is planned as its own module.

@@ -209,15 +209,36 @@ __attribute__((noinline)) inline void newline() {
 }
 }
 
-inline void println(const char* str) { print(str); detail::newline(); }
-inline void println_P(const char* s) { print_P(s); detail::newline(); }
-inline void println(uint32_t n)      { print(n);   detail::newline(); }
-inline void println(int32_t n)       { print(n);   detail::newline(); }
-inline void println(uint16_t n)      { print(n);   detail::newline(); }
-inline void println(int16_t n)       { print(n);   detail::newline(); }
-inline void printlnHex(uint8_t n)    { printHex(n); detail::newline(); }
-inline void printlnHex(uint16_t n)   { printHex(n); detail::newline(); }
-inline void printlnHex(uint32_t n)   { printHex(n); detail::newline(); }
+// the println family is noinline too: each is a two-call wrapper that
+// GCC stops inlining as call sites accumulate, and -Winline would
+// then flag them one by one as programs grow
+__attribute__((noinline)) inline void println(const char* str) {
+    print(str); detail::newline();
+}
+__attribute__((noinline)) inline void println_P(const char* s) {
+    print_P(s); detail::newline();
+}
+__attribute__((noinline)) inline void println(uint32_t n) {
+    print(n); detail::newline();
+}
+__attribute__((noinline)) inline void println(int32_t n) {
+    print(n); detail::newline();
+}
+__attribute__((noinline)) inline void println(uint16_t n) {
+    print(n); detail::newline();
+}
+__attribute__((noinline)) inline void println(int16_t n) {
+    print(n); detail::newline();
+}
+__attribute__((noinline)) inline void printlnHex(uint8_t n) {
+    printHex(n); detail::newline();
+}
+__attribute__((noinline)) inline void printlnHex(uint16_t n) {
+    printHex(n); detail::newline();
+}
+__attribute__((noinline)) inline void printlnHex(uint32_t n) {
+    printHex(n); detail::newline();
+}
 
 #endif
 
