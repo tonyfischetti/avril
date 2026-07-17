@@ -32,6 +32,7 @@ ATMega328P.
   - [`Button`](#button)
   - [`RotaryEncoder`](#rotaryencoder)
   - [`RotaryEncoderWithButton`](#rotaryencoderwithbutton)
+  - [`LCD1602` — 16×2 text over I²C](#lcd1602--162-text-over-ic)
   - [`SD::Card` — raw-block SD storage](#sdcard--raw-block-sd-storage)
   - [`VS1053::Codec` — MP3 (and more) playback](#vs1053codec--mp3-and-more-playback)
 - [Putting it together: the canonical main loop](#putting-it-together-the-canonical-main-loop)
@@ -838,6 +839,44 @@ dropped RELEASE left suppression state stale the same way.
 `notifyInterruptOccurred` fans out to both children, so the ISR
 only deals with one object; `pendingDebounceTimeout()` ORs the children, so
 the sleep gate does too.
+
+### `LCD1602` — 16×2 text over I²C
+
+The classic HD44780 character LCD behind the ubiquitous PCF8574 I²C
+"backpack": text output on two wires, on **all three MCUs** (the tinies
+via the bit-banged I²C master — a tiny85 driving a text display is a
+genuinely pleasing sight).
+
+```cpp
+#include "devices/LCD1602.hpp"
+using I2c = HAL::Comms::I2C::Master<100000>;   // or the tiny pin-template form
+using Lcd = HAL::Devices::LCD1602<I2c>;        // optional addr7 param; 0x27
+                                               // default, A-variant chips 0x3F
+Lcd::begin();
+Lcd::print_P(PSTR("now playing:"));            // PROGMEM, like the UART
+Lcd::setCursor(0, 1);
+Lcd::print("TRACK01.MP3");
+Lcd::print(someUint32);                        // and int32_t
+Lcd::backlight(false);
+Lcd::createChar(0, glyph8);                    // custom 5×8 glyphs, slots 0-7
+Lcd::write(static_cast<char>(0));              // ...printed like characters
+```
+
+Worth knowing:
+
+- **How the backpack works**: the PCF8574 is an 8-bit I²C GPIO expander
+  wired to the LCD's 4-bit mode (RS/RW/EN/backlight on the low nibble,
+  D4–D7 on the high). Every LCD byte becomes one 4-byte I²C transaction
+  (two nibbles, each with an EN pulse) — ~450 µs per character at
+  100 kHz, which hides the HD44780's ~37 µs instruction time completely,
+  so only `clear()`/`home()` (~1.6 ms inside the controller) carry
+  explicit delays.
+- **Errors are `HAL::Comms::I2C::Result` passed straight through** —
+  the only thing that can fail is the bus. `begin()` returning
+  `NACK_ADDR` almost always means the other backpack address; the I²C
+  module's `ping()` scanner settles it in seconds.
+- Write-only by design (RW is held low); the busy flag is never read —
+  bus timing already exceeds instruction timing.
 
 ### `SD::Card` — raw-block SD storage
 
