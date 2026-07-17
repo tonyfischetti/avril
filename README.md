@@ -30,6 +30,7 @@ ATMega328P.
   - [`Button`](#button)
   - [`RotaryEncoder`](#rotaryencoder)
   - [`RotaryEncoderWithButton`](#rotaryencoderwithbutton)
+  - [`SD::Card` — raw-block SD storage](#sdcard--raw-block-sd-storage)
 - [Putting it together: the canonical main loop](#putting-it-together-the-canonical-main-loop)
 - [Known limitations](#known-limitations)
 
@@ -773,6 +774,56 @@ dropped RELEASE left suppression state stale the same way.
 `notifyInterruptOccurred` fans out to both children, so the ISR
 only deals with one object; `pendingDebounceTimeout()` ORs the children, so
 the sleep gate does too.
+
+### `SD::Card` — raw-block SD storage
+
+The first thing-on-a-bus device: an SD card driven over `comms/spi.hpp`,
+speaking the SD SPI-mode protocol. **Deliberately no filesystem** — at
+this layer the card is a huge array of numbered 512-byte blocks, a
+multi-gigabyte EEPROM. That's the whole substrate a datalogger needs
+(write records into sequential blocks; read them back over a USB card
+reader with `dd` and a few lines of host-side script), and it's what a
+FAT library would sit on if computer-mountable files are ever wanted.
+FAT is a separate later decision, and on the tinies a non-decision: a
+real FAT needs a 512-byte sector buffer, and the tinies have 512 bytes
+of RAM, *total*.
+
+```cpp
+#include "devices/SDCard.hpp"          // opt-in, like all devices
+using Sd = HAL::Devices::SD::Card<16>; // CS pin; optional fastHz ceiling
+
+if (Sd::begin() != HAL::Devices::SD::Result::OK) { /* no card / dead bus */ }
+Sd::numBlocks();                       // capacity, from the CSD register
+Sd::readBlock(0, buf512);              // classic full-block read (328P-ish)
+Sd::readPartial(0, 510, sig, 2);       // a *window* of a block: tiny-friendly
+Sd::writeBlock(n, buf512);             // full-block write
+Sd::writeBlockStream(n, &makeByte);    // byte-source callback: no buffer ever
+```
+
+Design notes:
+
+- **No block-sized buffer anywhere in the driver.** Reads can address a
+  window within a block (the whole block still crosses the wire — the
+  protocol insists — but only the window lands in RAM), and writes can
+  stream from a `uint8_t (*)(uint16_t idx)` callback asked for bytes
+  0–511 in order. This is how a 512-byte block leaves a chip with 512
+  bytes of RAM.
+- **Every call returns a `Result`** (`OK`, `NO_CARD`, `UNSUPPORTED`,
+  `TIMEOUT`, `CMD_ERROR`, `READ_ERROR`, `WRITE_ERROR`, `BAD_PARAMS`,
+  `NOT_INITIALIZED`) and every wait — init handshake, data token, write
+  busy — is bounded, in the I²C module's spirit: a missing or wedged
+  card is an error code, not a hung lamp.
+- **Two speeds, one bus**: the SD spec caps the init handshake at
+  400 kHz, so `begin()` runs on a `SPI::Master<400000>` and shifts to
+  the `fastHz` ceiling (default 8 MHz) once the card is up. `begin()`
+  handles the whole ritual — 74 wake-up clocks, CMD0/CMD8/ACMD41/CMD58 —
+  and detects SDHC/SDXC vs byte-addressed cards (`isSDHC()`).
+- **Hardware realities**: SD cards are strictly 3.3 V parts — from a 5 V
+  AVR use a module with a level shifter. Writes draw 30–100 mA bursts.
+  Cheap no-name cards are notoriously loose about the init handshake;
+  bring up with a name-brand card.
+- **Not implemented, deliberately**: multi-block transfers (CMD18/25)
+  and MMC-era cards.
 
 ## Putting it together: the canonical main loop
 
