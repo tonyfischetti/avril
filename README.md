@@ -1159,7 +1159,9 @@ canonical loop below. Current residents:
   battery monitoring through a divider, and a header comment that
   documents the whole circuit *and why each part is there* (gate
   pulldown, flyback diode, micropower-LDO-not-a-buck, the divider's
-  cap). 1 KB of flash.
+  cap) — plus a sensor-alternatives survey (EKMB, RCWL-0516, spring
+  switches, piezo discs) covering the presence-vs-disturbance split
+  and each option's power budget. 1 KB of flash.
 - **`ir-probe`** (328P): the IR *learning tool* — point any NEC remote
   at it and every button shows its address/command in hex on the LCD
   (live repeat counter while held) and as copy-pasteable UART lines,

@@ -75,6 +75,69 @@
  *   MOSFET gate  -> PB1 (6), with the 100k pulldown
  *   divider tap  -> PB4 (3), with the 100n to GND
  *
+ * ---- Sensor alternatives -----------------------------------------
+ *
+ * The sensor choice decides what this alarm IS. Two families:
+ *
+ *   PRESENCE detectors sense people moving in a space (this build:
+ *   a room alarm). DISTURBANCE detectors sense the device itself
+ *   being moved, tilted, or struck (a tamper alarm: bike, toolbox,
+ *   door, package). Same firmware skeleton either way -- a wake
+ *   source on PB2 -- but a different appliance.
+ *
+ * Presence family:
+ *
+ *   - HC-SR501 PIR (fitted here, ~$1): ~50 uA, 3-7 m range with the
+ *     dome lens, adjustable hold time and sensitivity, push-pull
+ *     3.3 V output, ~60 s power-on stabilization (why the firmware
+ *     arms late). The default for a reason; also the budget's
+ *     dominant term.
+ *   - Panasonic EKMB "PaPIRs" (~$10): the luxury PIR. 1-6 uA
+ *     depending on variant -- fitting one drops this alarm's floor
+ *     from ~58 uA to ~12 uA and the 9 V lasts YEARS. Smaller,
+ *     factory-characterized lens, near-instant startup, but no
+ *     adjustments and mind the variant: some are open-drain outputs
+ *     and need a (high-value) pull-up. The upgrade to buy when the
+ *     battery life is the product.
+ *   - RCWL-0516 microwave doppler (~$1): sees through plastic and
+ *     thin walls, so it hides INSIDE an opaque enclosure -- no lens
+ *     window to give the device away. The catches: ~3 mA
+ *     continuously (battery-hostile: ~1 week on this 9 V), needs
+ *     >4 V supply, and it also sees through the walls you didn't
+ *     mean it to (false triggers from the next room). Wall-powered
+ *     stealth builds only.
+ *
+ * Disturbance family:
+ *
+ *   - SW-18015P spring switch (the KY-002 module, ~$0.20): a spring
+ *     in a tube that chatters against a contact when jolted. ZERO
+ *     quiescent current -- it is literally a switch, and with the
+ *     PCINT pull-up it draws nothing while still. The output is a
+ *     filthy burst of bounces, which for THIS architecture is
+ *     perfect: any edge wakes the chip, and "debouncing" is just
+ *     "treat a burst as one event, then a lockout nap". Firmware
+ *     delta: enable the internal pullup on PB2 and alarm on any
+ *     edge burst. Orientation-sensitive, misses slow tilt, no
+ *     sensitivity adjustment -- but a tamper alarm with a ~7 uA
+ *     floor (the divider and LDO become the budget).
+ *   - 801S vibration module (~$1): the same spring idea plus an
+ *     LM393 comparator and sensitivity pot for a clean digital
+ *     output. The convenience costs the battery: the comparator
+ *     chain idles at hundreds of uA -- worse than the raw switch it
+ *     cleans up, on the wrong side of this design's budget. For
+ *     wall power, or when adjustable sensitivity matters more than
+ *     the battery.
+ *   - Piezo ceramic disc (~$0.50): not a switch but a GENERATOR --
+ *     flexing it makes voltage, so quiescent current is exactly
+ *     zero and sensitivity is analog (a tap vs a thump are
+ *     different amplitudes -- knock-pattern locks live here). The
+ *     cost is interface fiddliness: it wants a ~1 M load resistor,
+ *     and its spikes can exceed the rails (add a series resistor;
+ *     the AVR's clamp diodes handle the rest at piezo-disc
+ *     energies). Read it with Analog::read() while awake, or bias
+ *     it so a sharp knock crosses the digital threshold for a
+ *     PCINT wake. Most work, most interesting signal.
+ *
  * Exercises: GPIO (PCINT wake), Sleep (PWR_DOWN), Watchdog::sleepFor
  * (every delay in the program), Analog (raw-battery divider). No
  * Ticker, no UART: the appliance is silence, interrupted.
