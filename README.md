@@ -1096,6 +1096,11 @@ canonical loop below. Current residents:
   bring-up failure named on the display ("no SD card", …). The
   data-pump architecture from the module docs, running for real, in
   ~7 KB.
+- **`vitals-monitor`** (tiny84): battery voltage (the bandgap-against-
+  Vcc trick, with a programmatically-drawn battery-icon gauge), on-die
+  temperature, and a photoresistor percent on an LCD — waking from
+  `PWR_DOWN` every ~2 s via `Watchdog::sleepFor` and never even
+  starting the Ticker. 1.8 KB of flash, six bytes of RAM.
 
 ## Putting it together: the canonical main loop
 
