@@ -1160,6 +1160,12 @@ canonical loop below. Current residents:
   documents the whole circuit *and why each part is there* (gate
   pulldown, flyback diode, micropower-LDO-not-a-buck, the divider's
   cap). 1 KB of flash.
+- **`ir-probe`** (328P): the IR *learning tool* — point any NEC remote
+  at it and every button shows its address/command in hex on the LCD
+  (live repeat counter while held) and as copy-pasteable UART lines,
+  with one `.` per ~110 ms repeat frame so the hold cadence draws
+  itself on the terminal. Building a command table for a remote is:
+  mash every button, save the log. Silence diagnoses "not NEC".
 
 ## Putting it together: the canonical main loop
 

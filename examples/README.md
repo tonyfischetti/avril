@@ -33,3 +33,4 @@ Current examples:
 | `mp3-player` | ATmega328P | SPI, I²C, UART, SD, FAT32, VS1053, LCD1602, RotaryEncoderWithButton, Ticker, Sleep |
 | `vitals-monitor` | ATtiny84 | Analog (Vcc gauge, on-die temp, LDR), Watchdog (PWR_DOWN cadence), I²C (bit-banged), LCD1602 |
 | `motion-alarm` | ATtiny85 | GPIO (PCINT wake), Sleep (PWR_DOWN), Watchdog (all timing), Analog (raw-battery divider) |
+| `ir-probe` | ATmega328P | IRReceiverNEC (timestamp-first ISR), LCD1602, UART, Ticker, Sleep |
