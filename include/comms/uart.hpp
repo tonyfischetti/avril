@@ -7,8 +7,8 @@
 #include <avr/pgmspace.h>
 
 /**
- * Blocking, transmit-oriented debug UART (ATmega328P only; the ATtiny84
- * and ATtiny85 have no USART).
+ * Blocking debug UART (ATmega328P only; the ATtiny84 and ATtiny85 have
+ * no USART). Transmit-oriented, with polled receive.
  *
  * The baud divisor is computed at compile time with proper rounding, and
  * double-speed mode (U2X) is selected automatically when it gives a
@@ -29,11 +29,32 @@
  *     register* (TXC0), so the final frame is still on the wire when
  *     the last print() returns. Call flush() before sleeping or
  *     resetting, or the last character arrives mangled.
+ *
+ * Receive is POLLED: available()/readByte()/tryRead() against the
+ * hardware's 2-deep FIFO, which grants roughly three character times
+ * of grace (~260 us at 115200, ~3 ms at 9600) between polls before
+ * bytes are lost. Plenty for a human typing at a debug prompt; a
+ * protocol talking fast wants the (not yet built) interrupt-driven
+ * ring buffer instead. tryRead() reports the hardware's per-byte
+ * verdict -- the FE0/DOR0/UPE0 flags describe the byte at the FIFO's
+ * head and are destroyed by reading UDR0, so they must be sampled
+ * first; that ordering is the entire subtlety of AVR UART reception.
  */
 
 namespace HAL {
 namespace Comms {
 namespace UART {
+
+enum class RxStatus : uint8_t {
+    OK,
+    NONE,          // nothing waiting (tryRead only)
+    FRAME_ERROR,   // no stop bit where one belonged: usually a baud
+                   // mismatch; the byte is garbage
+    OVERRUN,       // THIS byte is valid, but bytes BEFORE it were lost
+                   // to a too-slowly-polled FIFO
+    PARITY_ERROR   // can't occur in the 8N1 config init() sets; here
+                   // for completeness
+};
 
 // compile only where a USART exists: an allow-list, not a deny-list,
 // so a newly supported MCU without a USART gets an empty namespace
@@ -100,9 +121,33 @@ inline void init() {
     // Set frame format: 8 data bits, 1 stop bit, no parity
     UCSR0C = (1<<UCSZ01) | (1<<UCSZ00);
 
-    // Enable transmitter
-    //  TODO  parameterize
+    // Enable receiver and transmitter
     UCSR0B = (1<<RXEN0) | (1<<TXEN0);
+}
+
+inline bool available() {
+    return (UCSR0A & (1 << RXC0)) != 0;
+}
+
+// blocking read, no error reporting: the "wait for a human to press a
+// key" primitive. Deliberately unbounded -- waiting forever is the
+// point. Use tryRead() from a loop that has other work to do
+inline uint8_t readByte() {
+    while (!(UCSR0A & (1 << RXC0))) {}
+    return UDR0;
+}
+
+// non-blocking, error-honest read. THE ORDERING RULE: the error flags
+// describe the byte at the head of the receive FIFO and vanish when
+// UDR0 is read, so snapshot them first, pop the byte second
+inline RxStatus tryRead(uint8_t& out) {
+    uint8_t status { UCSR0A };
+    if (!(status & (1 << RXC0))) return RxStatus::NONE;
+    out = UDR0;
+    if (status & (1 << FE0))  return RxStatus::FRAME_ERROR;
+    if (status & (1 << DOR0)) return RxStatus::OVERRUN;
+    if (status & (1 << UPE0)) return RxStatus::PARITY_ERROR;
+    return RxStatus::OK;
 }
 
 // noinline (here and below): `inline` is for linkage, not a request to

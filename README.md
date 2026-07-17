@@ -554,9 +554,22 @@ Things worth knowing:
   pre-first-print `flush()` from spinning forever on a flag that never
   latches.
 
-Still deliberately absent: interrupt-driven (buffered) transmit — blocking
-is the point — and any receive API, though the receiver hardware is
-enabled (`RXEN0`) awaiting one.
+Receive is **polled**, in three functions: `available()`, `readByte()`
+(blocking — the "wait for a human to press a key" primitive), and
+`tryRead(uint8_t&)`, which returns an `RxStatus` (`OK`, `NONE`,
+`FRAME_ERROR` — usually a baud mismatch, byte is garbage — `OVERRUN` —
+*this* byte is fine but earlier ones were lost — or `PARITY_ERROR`).
+The one subtlety, encoded in `tryRead`: the hardware's error flags
+describe the byte at the head of the 2-deep receive FIFO and are
+destroyed by reading `UDR0`, so they must be sampled *first*. Polling
+cadence: the FIFO grants ~3 character times of grace (~260 µs at
+115200, ~3 ms at 9600) — plenty for a debug prompt, not for a fast
+protocol.
+
+Still deliberately absent: interrupt-driven (buffered) transmit —
+blocking is the point — and the interrupt-driven RX ring buffer, which
+becomes worthwhile only when something talks *to* the 328P faster than
+the main loop polls.
 
 ## FS
 
@@ -1043,7 +1056,8 @@ the ISR must `Ticker::resume()` before reading time).
 - **`getNumTicks()` wraps at ~49.7 days.** All library-internal comparisons
   are wrap-safe; keep yours wrap-safe too (`now - then >= window`, never
   `now >= then + window`).
-- **UART is TX-oriented and blocking**; RX is enabled but nothing reads it.
+- **UART is blocking, and RX is polled** (fine for a debug prompt; a fast
+  talker needs the not-yet-built interrupt-driven ring buffer).
 - **SPI is master-only and blocking** (deliberately — see its section);
   slave mode would need an interrupt-driven design the USI and SPI
   peripherals support but this module doesn't attempt.
