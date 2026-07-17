@@ -16,8 +16,14 @@ Conventions:
   (notify-from-ISR, process-in-main, sleep at the bottom) — they are
   the living demonstrations of the concurrency contract, not
   exceptions to it.
-- Flash them with your usual programmer; `make` produces
-  `build/main.hex`.
+- `make` produces `build/main.hex`; `make flash` programs it
+  (usbtiny by default — `make flash PROGRAMMER=usbasp` to override).
+- `make fuses` sets the chip's fuses to match the example's clock
+  configuration — **once per chip**, since fuses persist. The active
+  line in each Makefile documents what every fuse byte means, and
+  commented-out alternatives (factory restore, internal-RC, BOD
+  variants) sit beside it, each with its tradeoff. The warnings about
+  RSTDISBL/SPIEN are not decorative: those two brick ISP access.
 
 Current examples:
 
