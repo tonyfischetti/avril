@@ -210,7 +210,7 @@ __attribute__((noinline)) inline void print(uint32_t n) {
     print(p);
 }
 
-inline void print(int32_t n) {
+__attribute__((noinline)) inline void print(int32_t n) {
     if (n < 0) {
         printByte(static_cast<uint8_t>('-'));
         // negate in unsigned space: -INT32_MIN overflows int32_t, but
@@ -226,8 +226,12 @@ inline void print(int32_t n) {
 // the 32-bit signed and unsigned printers. uint8_t/int8_t arguments
 // promote to int and land on the int16_t overload, printing their
 // numeric value; use printByte() to send a raw character instead
-inline void print(uint16_t n) { print(static_cast<uint32_t>(n)); }
-inline void print(int16_t n)  { print(static_cast<int32_t>(n));  }
+__attribute__((noinline)) inline void print(uint16_t n) {
+    print(static_cast<uint32_t>(n));
+}
+__attribute__((noinline)) inline void print(int16_t n) {
+    print(static_cast<int32_t>(n));
+}
 
 // fixed-width uppercase hex, no prefix: two digits per byte, so
 // printHex(PINB) reads like the datasheet. Widths compose: the 16- and

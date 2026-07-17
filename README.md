@@ -34,6 +34,7 @@ ATMega328P.
   - [`RotaryEncoder`](#rotaryencoder)
   - [`RotaryEncoderWithButton`](#rotaryencoderwithbutton)
   - [`LCD1602` — 16×2 text over I²C](#lcd1602--162-text-over-ic)
+  - [`DS3231::Clock` — wall-clock time and alarms](#ds3231clock--wall-clock-time-and-alarms)
   - [`SD::Card` — raw-block SD storage](#sdcard--raw-block-sd-storage)
   - [`VS1053::Codec` — MP3 (and more) playback](#vs1053codec--mp3-and-more-playback)
 - [Putting it together: the canonical main loop](#putting-it-together-the-canonical-main-loop)
@@ -928,6 +929,53 @@ Worth knowing:
   module's `ping()` scanner settles it in seconds.
 - Write-only by design (RW is held low); the busy flag is never read —
   bus timing already exceeds instruction timing.
+
+### `DS3231::Clock` — wall-clock time and alarms
+
+The temperature-compensated I²C RTC (±2 ppm — a minute per *year*,
+against the watchdog oscillator's minute per minute) with battery
+backup. Its architectural role here: the **precision complement to
+`Watchdog::sleepFor`** — the watchdog wakes you "after roughly N
+seconds," the DS3231's alarm pin wakes you *at 7:00*. Wire INT/SQW
+(open-drain — pull it up) to a PCINT and the AVR sleeps in `PWR_DOWN`
+at microamps until a wall-clock moment. Works on all three MCUs; the
+tiny85 + two bit-banged wires + this chip is an alarm clock.
+
+```cpp
+#include "devices/DS3231.hpp"
+using Rtc = HAL::Devices::DS3231::Clock<I2c>;   // fixed address 0x68
+
+bool stale; Rtc::oscStopped(stale);   // "battery died; time is fiction"
+HAL::Devices::DS3231::DateTime dt;
+Rtc::getTime(dt);  /* dt.year/.month/.date/.dow/.hour/.minute/.second */
+Rtc::setTime(dt);                     // also clears the stale flag
+
+HAL::Devices::DS3231::DateTime at {}; at.hour = 7;
+Rtc::setAlarm1(at, HAL::Devices::DS3231::Alarm1Mode::HOUR_MIN_SEC_MATCH);
+Rtc::enableAlarmInterrupts(true, false);
+Rtc::clearAlarmFlags();               // see THE GOTCHA below
+
+int16_t q; Rtc::readTemperatureQuarters(q);   // 25.75 °C -> 103
+```
+
+Worth knowing:
+
+- **THE GOTCHA**: the alarm flags latch, and INT stays low until *you*
+  call `clearAlarmFlags()`. Forget it after handling a wake-up, and
+  the daily alarm fires exactly once per battery. Clear at arm time
+  too, so INT starts high.
+- **`oscStopped()` is the honesty check** — the chip confessing it lost
+  both power and battery at some point, so `getTime()` is fiction.
+  Check it at boot; `setTime()` clears it, because setting the clock
+  is what makes time real again.
+- Two alarms (alarm 1 to the second, alarm 2 to the minute) with match
+  modes from every-second up to date+time; `enableSquareWave(HZ_1)` is
+  the alternative use of the pin — a 1 Hz wall-clock heartbeat into a
+  PCINT (mutually exclusive with alarm interrupts).
+- The thermometer is **factory-calibrated** (±3 °C, 0.25 °C steps — it
+  exists to trim the crystal), unlike the AVR's on-die sensor: this one
+  means something.
+- 24-hour mode and years 2000–2099 only, by design.
 
 ### `SD::Card` — raw-block SD storage
 
