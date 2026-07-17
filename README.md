@@ -23,6 +23,8 @@ ATMega328P.
   - [`comms/i2c.hpp` — blocking I²C master](#commsi2chpp--blocking-ic-master)
   - [`comms/spi.hpp` — blocking SPI master](#commsspihpp--blocking-spi-master)
   - [`comms/uart.hpp` — debug serial (ATmega328P only)](#commsuarthpp--debug-serial-atmega328p-only)
+- [FS](#fs)
+  - [`fs/fat32.hpp` — read-only FAT32](#fsfat32hpp--read-only-fat32)
 - [Utils](#utils)
   - [`IntTransitionDebouncer` — interrupt-driven debouncing](#inttransitiondebouncer--interrupt-driven-debouncing)
   - [`LFSR` — fast 8-bit pseudorandomness](#lfsr--fast-8-bit-pseudorandomness)
@@ -365,11 +367,13 @@ not accurate.
 ## Comms
 
 Buses for talking to *other chips*, as distinct from the top-level modules
-(the MCU's own facilities), `devices/` (things wired to pins), and
-`utils/` (software helpers). Everything here lives under `HAL::Comms::`,
-mirroring how `devices/` maps to `HAL::Devices`. Note that drivers for
-chips that *sit on* a bus (an SD card, an MCP2515) belong in `devices/`,
-consuming a comms module — bus versus thing-on-the-bus is the boundary.
+(the MCU's own facilities), `devices/` (things wired to pins), `fs/`
+(filesystems over block devices), and `utils/` (software helpers).
+Everything here lives under `HAL::Comms::`, mirroring how `devices/` maps
+to `HAL::Devices`. Note that drivers for chips that *sit on* a bus (an SD
+card, an MCP2515) belong in `devices/`, consuming a comms module — bus
+versus thing-on-the-bus is the boundary — and anything that interprets a
+block device's *contents* belongs in `fs/`.
 
 The extra namespace level costs a few characters at every debug print;
 the idiomatic relief is an alias at the top of an app file:
@@ -551,6 +555,65 @@ Things worth knowing:
 Still deliberately absent: interrupt-driven (buffered) transmit — blocking
 is the point — and any receive API, though the receiver hardware is
 enabled (`RXEN0`) awaiting one.
+
+## FS
+
+Filesystem layers over block devices — one more floor of the same
+building: `comms/spi.hpp` moves bytes, `devices/SDCard.hpp` turns them
+into numbered blocks, and `fs/` interprets what a *computer* wrote into
+those blocks. Lives under `HAL::FS::`.
+
+### `fs/fat32.hpp` — read-only FAT32
+
+Enough filesystem to find files a computer put on the card, and not one
+line more: mount, iterate directories, find by name, sequential read,
+seek. No write, no create, no long filenames (LFN-named files appear
+under their `SHORTN~1` aliases). The motivating use case is streaming —
+drag MP3s onto a card, walk the root directory, pump the bytes at a
+decoder chip.
+
+```cpp
+#include "fs/fat32.hpp"
+using Sd  = HAL::Devices::SD::Card<16>;
+using Fat = HAL::FS::FAT32<Sd>;          // templated on the block device
+
+Fat::mount();                            // MBR or superfloppy, FAT32 only
+Fat::FileInfo info;
+for (Fat::DirIter it { Fat::root() };
+     Fat::next(it, info) == HAL::FS::Result::OK; ) {
+    // info.name ("SONG.MP3"), info.size, info.dirP, ...
+}
+Fat::find("TRACK01.MP3", info);          // case-insensitive 8.3 lookup
+Fat::File f;
+Fat::open(info, f);
+uint16_t got;
+Fat::read(f, buf, sizeof(buf), got);     // sequential; got < len at EOF
+Fat::seek(f, info.size / 2);             // random access within the file
+```
+
+Design notes:
+
+- **No sector buffer, anywhere.** FAT32 work decomposes into small
+  windowed reads — directory entries are 32-byte records, FAT chain
+  links 4-byte words — which is exactly the SD driver's `readPartial()`.
+  Total RAM: ~18 bytes of mount state plus 16 per open `File`, so the
+  full SPI + SD + FAT32 stack runs on a tiny.
+- **Random access, two flavors.** *Across* files: directory iteration
+  hands you every file's location, so "track 7" or shuffle is just
+  opening a different `FileInfo`. *Within* a file: `seek()` works, but
+  FAT is a linked list of clusters, so it walks the chain from the
+  start — one 4-byte read per 4–32 KiB cluster, tens of ms into a
+  multi-MB file. Fine per track-skip, not per byte.
+- **Wire cost intuition**: every windowed read still moves a full
+  512-byte block over SPI (the SD protocol insists), so bulk streaming
+  should call `read()` with the largest buffer RAM allows — at 512
+  bytes per call the overhead is zero, and a tiny reading 16-byte
+  windows pays 32×. Budget accordingly against your data rate.
+- **Errors are `HAL::FS::Result`** (`NOT_MOUNTED`, `NO_FILESYSTEM`,
+  `UNSUPPORTED`, `IO_ERROR`, `NOT_FOUND`, `BAD_PARAMS`) — same
+  philosophy as the layers below it.
+- **FAT32 only**: cards ≤ 2 GB often ship FAT16, which this deliberately
+  doesn't speak — reformat them; SDHC cards come FAT32 out of the box.
 
 ## Utils
 
