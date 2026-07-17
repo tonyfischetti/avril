@@ -15,6 +15,7 @@ ATMega328P.
 - [Requirements and setup](#requirements-and-setup)
 - [The concurrency contract](#the-concurrency-contract)
 - [Core modules](#core-modules)
+  - [`analog.hpp` — blocking 10-bit ADC reads](#analoghpp--blocking-10-bit-adc-reads)
   - [`gpio.hpp` — pin abstraction](#gpiohpp--pin-abstraction)
   - [`ticker.hpp` — 1 kHz millisecond timebase](#tickerhpp--1-khz-millisecond-timebase)
   - [`sleep.hpp` — sleep-mode helper](#sleephpp--sleep-mode-helper)
@@ -181,6 +182,43 @@ notify every device from every ISR without cross-talk. The port comparison is ag
 nothing when the argument is a compile-time constant.
 
 ## Core modules
+
+### `analog.hpp` — blocking 10-bit ADC reads
+
+All three MCUs share the same 10-bit ADC core, and a blocking read
+cannot hang (the start bit self-clears) — making this the simplest
+peripheral in the HAL: no timeouts, no ISR, no protocol. (It's
+`HAL::Analog`, not `HAL::ADC`, because avr-libc claims `ADC` as a macro
+for the result register. The macro wins.)
+
+```cpp
+HAL::Analog::begin();                 // prescaler chosen at compile time
+uint16_t v  { HAL::Analog::read<23>() };   // physical pin, 0..1023, ~110 µs
+uint8_t  v8 { HAL::Analog::read8<23>() };  // 256 steps: volume-pot grade
+HAL::Analog::setReference<HAL::Analog::Ref::INTERNAL_1V1>();
+uint16_t mv { HAL::Analog::readVccMillivolts() };  // battery gauge, free
+uint16_t t  { HAL::Analog::readTemperature() };    // on-die, relative only
+```
+
+Worth knowing:
+
+- **Channels are physical pins**, like `GPIO<pin>`; a pin with no ADC
+  behind it fails the build. (328P: 23–28. tiny84: 6–13 — every PA pin.
+  tiny85: 1, 2, 3, 7.)
+- **The classic gotchas are handled inside**: `ADCL` is read before
+  `ADCH` (the low read latches the pair); the first conversion after a
+  *reference change* is automatically discarded (reference settling —
+  the "my first reading is always wrong" bug); and each channel's
+  digital input buffer is disabled (DIDR0) so it stops burning current
+  at mid-rail.
+- **References are compile-time** (`setReference<Ref::...>()`), so
+  asking a chip for a reference it doesn't have — `INTERNAL_2V56` is
+  tiny85-only — is a build error, not a wrong voltage.
+- **`readVccMillivolts()`** samples the internal 1.1 V bandgap *against
+  Vcc* and solves backwards: a no-external-parts battery gauge. The
+  bandgap is ±10% chip-to-chip; calibrate the constant per board if it
+  matters. `readTemperature()` is the on-die sensor, raw: ~1 LSB/°C
+  with a big uncalibrated offset — "warmer than before," not degrees.
 
 ### `gpio.hpp` — pin abstraction
 

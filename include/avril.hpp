@@ -3,6 +3,7 @@
 #include "common.hpp"
 
 // Include all core HAL modules
+#include "analog.hpp"
 #include "gpio.hpp"
 #include "watchdog.hpp"
 #include "sleep.hpp"
