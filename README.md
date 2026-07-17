@@ -35,6 +35,7 @@ ATMega328P.
   - [`RotaryEncoderWithButton`](#rotaryencoderwithbutton)
   - [`LCD1602` — 16×2 text over I²C](#lcd1602--162-text-over-ic)
   - [`DS3231::Clock` — wall-clock time and alarms](#ds3231clock--wall-clock-time-and-alarms)
+  - [`IRReceiverNEC` — infrared remote control](#irreceivernec--infrared-remote-control)
   - [`SD::Card` — raw-block SD storage](#sdcard--raw-block-sd-storage)
   - [`VS1053::Codec` — MP3 (and more) playback](#vs1053codec--mp3-and-more-playback)
 - [Examples](#examples)
@@ -146,9 +147,11 @@ provided three invariants hold:
 
 The contract's actual purpose — one writer per datum, no two-context
 mutation — survives intact; only the *location* of the state machine
-moves. `RotaryEncoder` is the resident example (its Gray-code table folds
-each edge into a signed quarter-step accumulator in the ISR), and any
-future pulse-timing decoder (IR remotes, for instance) should take the
+moves. There are two residents: `RotaryEncoder` (its Gray-code table
+folds each edge into a signed quarter-step accumulator in the ISR) and
+`IRReceiverNEC` (its protocol state machine classifies falling-edge
+periods in the ISR — the buffered alternative costs 68+ bytes of RAM a
+tiny cannot spare). Any future pulse-timing decoder should take the
 same shape.
 
 The canonical pin-change ISR looks like this (one per port; `PCINT0_vect`
@@ -977,6 +980,55 @@ Worth knowing:
   exists to trim the crystal), unlike the AVR's on-die sensor: this one
   means something.
 - 24-hour mode and years 2000–2099 only, by design.
+
+### `IRReceiverNEC` — infrared remote control
+
+NEC-protocol decoding for TSOP4838-style receivers — the driver that
+`TSOP4838.md` (repo root) designed in full before a line was written;
+read that for the deep story (jitter budget, protocol tables, RAM math,
+sleep interaction). The receiver can is the analog hero: photodiode,
+AGC, 38 kHz bandpass and demodulator inside, clean digital out — so the
+MCU's job reduces to classifying pulse periods on one pin.
+
+```cpp
+#include "devices/IRReceiverNEC.hpp"
+HAL::Devices::IRReceiverNEC<12> ir;   // + optional validateAddress,
+                                      //   expectedAddress params
+ir.begin();
+ir.setOnCommand([](uint8_t addr, uint8_t cmd, bool repeatP) { ... });
+// ISR:  ir.notifyInterruptOccurred(nowMICROS, port, changed);
+// loop: ir.process();
+// sleep gate: … && !ir.busy() && …
+```
+
+Worth knowing:
+
+- **Decodes on falling edges only** — consecutive falling edges bracket
+  exactly one mark+space pair, so the TSOP's ±150 µs mark distortion
+  *cancels by construction* (a stretched mark steals from its own
+  space), rising edges cost a few cycles to discard, and the decision
+  windows double in width. The four periods: 13.5 ms frame header,
+  11.25 ms repeat header, 2250 µs "1", 1125 µs "0".
+- **Timestamps are `getMicros()`**, not ticks — and in a shared ISR the
+  timestamp must be taken *first*, before other devices' notify work.
+- **The second resident of the ISR-decoder exception** (see the
+  concurrency section): decode state is ISR-only, frames cross via one
+  atomic claim, callbacks fire from `process()`. Total state ~15 bytes
+  versus the 68+ byte edge buffer a contract-pure design would need.
+- **Corruption is discarded, never misread**: the command/~command pair
+  is always validated. Address checking is opt-in (template params)
+  because extended-NEC remotes repurpose the address complement.
+- **Repeats are a feature**: a held button sends one frame then ~110 ms
+  repeat markers, reported as `isRepeat=true` with the last command —
+  press-and-hold ramping for free. Repeats with no prior command are
+  dropped.
+- **`busy()` belongs in your power-down gate**: an in-flight frame has
+  multi-ms quiet gaps, and powering down mid-frame freezes the µs clock
+  and garbles every period. A lone noise edge can't wedge the gate: state
+  older than ~20 ms self-resets.
+- The TSOP itself draws ~0.4 mA **continuously** — on battery, the
+  receiver (not the MCU) becomes the idle floor. A decision to make
+  knowingly; see the design doc's power section.
 
 ### `SD::Card` — raw-block SD storage
 
