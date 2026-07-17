@@ -30,7 +30,7 @@ Current examples:
 | example | MCU | modules exercised |
 |---|---|---|
 | `alarm-clock` | ATmega328P | I²C, DS3231, LCD1602, RotaryEncoderWithButton, Ticker, Sleep, UART |
-| `mp3-player` | ATmega328P | SPI, I²C, UART, SD, FAT32 (playlist folders via `openDir`), VS1053, LCD1602, RotaryEncoderWithButton, Ticker, Sleep. ID3v2 tag-skip for instant starts |
+| `mp3-player` | ATmega328P | SPI, I²C, UART, SD, FAT32 (playlist folders via `openDir`), VS1053, LCD1602, RotaryEncoderWithButton, Ticker, Sleep. ID3 titles/artists on the LCD (`Utils::ID3`: v2-first, v1-fallback, filename last resort) + instant starts |
 | `vitals-monitor` | ATtiny84 | Analog (Vcc gauge, on-die temp, LDR), Watchdog (PWR_DOWN cadence), I²C (bit-banged), LCD1602 |
 | `motion-alarm` | ATtiny85 | GPIO (PCINT wake), Sleep (PWR_DOWN), Watchdog (all timing), Analog (raw-battery divider). Two variants: `pir` (room alarm, default) and `VARIANT=sw18015p` (bike/tamper alarm, ~8 µA) |
 | `ir-probe` | ATmega328P | IRReceiverNEC (timestamp-first ISR), LCD1602, UART, Ticker, Sleep |

@@ -16,14 +16,18 @@
  *   - press to pause/resume (the codec just stops being fed; its FIFO
  *     picks up seamlessly on resume);
  *   - rotate WHILE pressed for volume;
- *   - ID3v2 TAGS ARE SKIPPED before pumping: modern rips carry
- *     50-500 KB of embedded album art up front, which the VS1053
- *     would chew through silently for seconds at the pump's ~40 KB/s.
- *     Ten lines of header parsing and one Fat::seek() make every
- *     track start instantly;
- *   - LCD shows the filename and play/pause state on row 0; track
- *     number, decode time (from the codec itself), and volume on
- *     row 1;
+ *   - ID3 TAGS ARE READ, NOT JUST SKIPPED: Utils::ID3::readTags()
+ *     pulls the title and artist (ID3v2 TIT2/TPE1 first, the v1
+ *     record at file end as a per-field fallback, the filename as
+ *     the last resort) and leaves the file positioned at the first
+ *     audio byte -- which is also the instant-start trick: modern
+ *     rips carry 50-500 KB of embedded album art up front that the
+ *     VS1053 would otherwise chew through silently for seconds at
+ *     the pump's ~40 KB/s;
+ *   - LCD row 0 shows play/pause state plus the track title,
+ *     swapping to the artist every few seconds when one is known;
+ *     row 1 has track number, decode time (from the codec itself),
+ *     and volume;
  *   - every bring-up failure is a message on the LCD, not a blank
  *     stare: "no SD card", "no FAT32", "no VS1053", "no MP3 files".
  *
@@ -67,6 +71,7 @@
 #include "devices/VS1053.hpp"
 #include "devices/LCD1602.hpp"
 #include "fs/fat32.hpp"
+#include "utils/ID3.hpp"
 
 namespace UART = HAL::Comms::UART;
 namespace VS   = HAL::Devices::VS1053;
@@ -75,6 +80,7 @@ using I2c = HAL::Comms::I2C::Master<100000>;
 using Lcd = HAL::Devices::LCD1602<I2c>;
 using Sd  = HAL::Devices::SD::Card<16, 8000000>;
 using Fat = HAL::FS::FAT32<Sd>;
+using Id3 = HAL::Utils::ID3<Fat>;
 using Mp3 = VS::Codec<24, 25, 26, 6>;
 
 HAL::Devices::RotaryEncoderWithButton<11, 30, 1000, HIGH, true,  // button
@@ -102,6 +108,16 @@ uint8_t       numTracks { 0 };
 bool          playingP  { false };
 bool          pausedP   { false };
 uint8_t       volAtt    { 0x30 };  // attenuation: smaller = louder
+
+// what the track calls itself: 14 visible chars (16 minus the state
+// glyph and its space) + NUL. Empty = the tag didn't say; the
+// filename is the last resort. When both title and artist are known,
+// row 0 alternates between them every few seconds
+constexpr uint8_t NAME_CAP { 15 };
+char          trackTitle[NAME_CAP]  { 0 };
+char          trackArtist[NAME_CAP] { 0 };
+bool          showArtistP { false };
+uint8_t       altSecs     { 0 };
 
 // the current playlist: a root-level directory's cluster, or 0 for
 // the implicit "ALL" playlist (loose .MP3s in the root itself)
@@ -259,11 +275,15 @@ void repaintBrowse() {
 void repaint() {
     if (browsingP) { repaintBrowse(); return; }
 
+    const char* label { songInfo.name };            // last resort
+    if (showArtistP && trackArtist[0] != '\0') label = trackArtist;
+    else if (trackTitle[0] != '\0')            label = trackTitle;
+
     Lcd::setCursor(0, 0);
     Lcd::write(pausedP ? static_cast<char>(1) : static_cast<char>(0));
     Lcd::write(' ');
     uint8_t i { 0 };
-    while (songInfo.name[i] != '\0') { Lcd::write(songInfo.name[i]); ++i; }
+    while (label[i] != '\0') { Lcd::write(label[i]); ++i; }
     while (i < 14) { Lcd::write(' '); ++i; }
 
     Lcd::setCursor(0, 1);
@@ -294,40 +314,33 @@ void die(const char* msg) {
 
 // ---- playback -----------------------------------------------------
 
-// ID3 phase 1: hop over the ID3v2 tag. Modern rips carry 50-500 KB
-// of embedded album art up front; the VS1053 skips it, but only as
-// fast as we pump (~40 KB/s) -- seconds of silence per track. The
-// tag announces its own size: "ID3", version, flags, then a 28-bit
-// SYNCSAFE length (7 bits per byte, high bits zero, so the size
-// can't contain a false frame-sync). Footer flag (bit 4) adds 10
-void skipId3(Fat::File& f) {
-    uint8_t  h[10];
-    uint16_t got;
-    if (Fat::read(f, h, 10, got) != HAL::FS::Result::OK || got < 10
-            || h[0] != 'I' || h[1] != 'D' || h[2] != '3') {
-        Fat::seek(f, 0);   // no tag: rewind the peek
-        return;
-    }
-    uint32_t size { (static_cast<uint32_t>(h[6] & 0x7F) << 21)
-                  | (static_cast<uint32_t>(h[7] & 0x7F) << 14)
-                  | (static_cast<uint32_t>(h[8] & 0x7F) << 7)
-                  |  static_cast<uint32_t>(h[9] & 0x7F) };
-    uint32_t skip { 10 + size + ((h[5] & 0x10) ? 10UL : 0UL) };
-    if (Fat::seek(f, skip) != HAL::FS::Result::OK) {
-        Fat::seek(f, 0);   // tag claims more than the file: play raw
-    }
-}
-
+// readTags does two jobs in one pass: pulls title/artist (ID3v2
+// frames first, the v1 record at file end per-field as fallback --
+// empty strings mean "use the filename"), and leaves the file
+// positioned at the first audio byte, hopping the 50-500 KB of
+// embedded album art a modern rip parks up front (which the VS1053
+// would otherwise chew through silently for seconds at the pump's
+// ~40 KB/s)
 void startTrack(uint8_t idx) {
     if (!trackByIndex(idx, songInfo)) return;
     Fat::open(songInfo, song);
-    skipId3(song);
+    Id3::readTags(song, trackTitle, trackArtist, NAME_CAP);
+    showArtistP = false;
+    altSecs     = 0;
     bufLen = bufUsed = 0;
     playingP = true;
     pausedP  = false;
     dirtyP   = true;
     UART::print("playing: ");
     UART::println(songInfo.name);
+    if (trackTitle[0] != '\0') {
+        UART::print("  title:  ");
+        UART::println(trackTitle);
+    }
+    if (trackArtist[0] != '\0') {
+        UART::print("  artist: ");
+        UART::println(trackArtist);
+    }
 }
 
 // feed the codec up to 16 bites per pass; DREQ self-limits. Returns
@@ -475,10 +488,17 @@ int main() {
         pumpAudio();
 
         // once a second: refresh the decode-time display. A few ms of
-        // LCD traffic is nothing against the codec's ~50 ms of FIFO
+        // LCD traffic is nothing against the codec's ~50 ms of FIFO.
+        // Every third second, swap row 0 between title and artist
+        // (when the tag supplied both)
         uint32_t ticks { HAL::Ticker::getNumTicks() };
         if (playingP && !pausedP && ticks - lastClock >= 1000) {
             lastClock = ticks;
+            if (trackArtist[0] != '\0'
+                    && ++altSecs >= 3) {
+                altSecs     = 0;
+                showArtistP = !showArtistP;
+            }
             dirtyP = true;
         }
 

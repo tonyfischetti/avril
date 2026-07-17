@@ -1,5 +1,10 @@
 # git, gitignore
 
+# host-side test binaries: tests/*.cpp compile to extensionless
+# executables beside their sources, which the *.out/*.exe patterns miss
+tests/format_test
+tests/id3_test
+
 build/
 target/
 dist/

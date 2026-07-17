@@ -31,6 +31,7 @@ ATMega328P.
   - [`LFSR` — fast 8-bit pseudorandomness](#lfsr--fast-8-bit-pseudorandomness)
   - [`Scheduler` — tick-less cooperative task table](#scheduler--tick-less-cooperative-task-table)
   - [`Fmt` — sink-agnostic number formatting](#fmt--sink-agnostic-number-formatting)
+  - [`ID3` — track titles off the tag](#id3--track-titles-off-the-tag)
 - [Devices](#devices)
   - [`Button`](#button)
   - [`RotaryEncoder`](#rotaryencoder)
@@ -815,6 +816,38 @@ checks every edge (all `uint32_t` digit boundaries, INT32_MIN, all 256
 hex bytes) against the host's `snprintf`. Touch the file, run the test.
 `UART::print` and `Lcd::print` are now thin pairings of these
 formatters with their sinks.
+
+### `ID3` — track titles off the tag
+
+`utils/ID3.hpp`, `HAL::Utils::ID3<Fs>`: enough ID3 to put a title on
+a 16-char LCD. One call does two jobs — fills the caller's
+title/artist buffers **and** leaves the file positioned at the first
+audio byte (hopping the 50–500 KB of embedded album art a modern rip
+parks up front, which is what makes tracks start instantly):
+
+```cpp
+using Id3 = HAL::Utils::ID3<Fat>;
+char title[15], artist[15];
+Fat::open(info, f);
+Id3::readTags(f, title, artist, sizeof(title));  // f now at the audio
+```
+
+Lookup is v2-first, v1-fallback, *per field* — a v2 tag carrying only
+a title still gets its artist from the v1 record at file end. Empty
+strings mean "the tag didn't say"; the caller's last resort is the
+filename. It reads ID3v2.3/v2.4 `TIT2`/`TPE1` (v2.3's plain vs
+v2.4's syncsafe frame sizes picked by the header's version byte;
+frames walked by absolute seek, so a big `APIC` costs one seek, not
+a half-megabyte read) and the fixed 128-byte v1 record. ISO-8859-1
+and UTF-8 pass through; UTF-16 keeps Latin-1 code points and shows
+`?` for the rest. v2.2, unsynchronised tags, and compressed frames
+are detected and *skipped correctly* (audio position stays right,
+v1 fallback still runs) — they just contribute no text.
+
+Like `Fmt`, it's templated on a filesystem *shape* rather than the
+real driver, so it's **host-tested**: `tests/id3_test.cpp` feeds it
+synthetic tags of every flavor through an in-memory mock filesystem.
+Touch the file, run the test.
 
 ## Devices
 
