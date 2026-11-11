@@ -257,6 +257,12 @@ The result is zero RAM per pin and each operation compiling to a single
 `sbi`/`cbi`/`sbic` where the register is in low I/O space. Power, crystal,
 and other non-GPIO physical pins are rejected by `static_assert`.
 
+`toggle()` is atomic like the rest, by a different route: it writes the
+pin's mask to the **PIN** register, and the hardware flips the PORT bit
+itself (all three supported chips do this). XORing PORT instead is a
+read-modify-write, and an ISR that changes another pin on the same port
+in the middle of it gets its change overwritten.
+
 ### `ticker.hpp` — 1 kHz millisecond timebase
 
 Timer0 in CTC mode, interrupting at exactly 1 kHz. "Exactly" is enforced:

@@ -179,7 +179,7 @@ struct GPIO {
     __attribute__((always_inline))
     static inline void setLow()    { portReg() &= static_cast<uint8_t>(~mask); }
     __attribute__((always_inline))
-    static inline void toggle()    { portReg() ^=  mask; }
+    static inline void toggle()    { pinReg()   =  mask; }
     __attribute__((always_inline))
     static inline bool read()      { return pinReg() & mask; }
 
